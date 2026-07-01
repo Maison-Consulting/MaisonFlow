@@ -65,6 +65,15 @@ const ROLE_CONFIG = {
   },
 };
 
+// Map a stored appRole value back to its canonical ROLES entry, tolerating
+// leading/trailing whitespace and any casing (" admin " → "Admin"). Returns
+// null if it matches no known role, so callers can fall back to DEFAULT_ROLE.
+export function normalizeRole(raw) {
+  if (!raw) return null;
+  const key = String(raw).trim().toLowerCase();
+  return ROLES.find((r) => r.toLowerCase() === key) || null;
+}
+
 export function roleConfig(role) {
   return ROLE_CONFIG[role] || ROLE_CONFIG[DEFAULT_ROLE];
 }

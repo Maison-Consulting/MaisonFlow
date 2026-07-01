@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx vite *)"
+      "Bash(npx vite *)",
+      "PowerShell(npm run deploy)",
+      "PowerShell(Start-Sleep -Seconds 8; $r = Invoke-WebRequest -Uri \"https://maison-consulting.github.io/MaisonFlow/\" -UseBasicParsing -Headers @{\"Cache-Control\"=\"no-cache\"}; $r.Content; \"`n--- 404.html check ---\"; try { $f = Invoke-WebRequest -Uri \"https://maison-consulting.github.io/MaisonFlow/404.html\" -UseBasicParsing; \"404.html => $\\($f.StatusCode\\)\" } catch { \"404.html => $\\($_.Exception.Response.StatusCode.value__\\)\" })"
     ]
   }
 }

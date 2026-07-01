@@ -46,7 +46,7 @@ const SECTIONS = [
 ];
 
 export function Sidebar({ open, onNavigate }) {
-  const { canView } = useAuth();
+  const { canView, email, role, isResolved } = useAuth();
   // Hide nav items the role can't view, then drop any section left empty.
   const sections = SECTIONS
     .map((s) => ({ ...s, items: s.items.filter((it) => canView(moduleForPath(it.to))) }))
@@ -58,6 +58,7 @@ export function Sidebar({ open, onNavigate }) {
         width: 'var(--sidebar-w)', background: 'var(--card)', borderRight: '1px solid var(--border)',
         height: '100vh', position: 'fixed', left: open ? 0 : 'calc(-1 * var(--sidebar-w))',
         top: 0, transition: 'left 0.2s', overflowY: 'auto', zIndex: 100,
+        display: 'flex', flexDirection: 'column',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '1.1rem 1.25rem', fontWeight: 800, fontSize: '1.1rem' }}>
@@ -97,6 +98,33 @@ export function Sidebar({ open, onNavigate }) {
           </div>
         ))}
       </nav>
+
+      {/* Identity + resolved-role indicator. Makes access issues self-diagnosing:
+          if the email didn't match a Resource row, role falls back to Viewer and
+          "unmatched" is shown so an admin knows why writes are hidden. */}
+      <div
+        style={{
+          marginTop: 'auto', padding: '0.85rem 1.1rem', borderTop: '1px solid var(--border)',
+          fontSize: '0.75rem', color: 'var(--muted-foreground)', lineHeight: 1.5,
+        }}
+      >
+        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={email || 'no account'}>
+          {email || 'no account'}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+          <span style={{
+            display: 'inline-block', padding: '0.1rem 0.5rem', borderRadius: 999, fontWeight: 700,
+            fontSize: '0.7rem', color: 'var(--primary)', background: 'oklch(0.62 0.17 35 / 0.1)',
+          }}>
+            {role}
+          </span>
+          {!isResolved && (
+            <span title="No Resource record matched this email — defaulting to Viewer. Add a Resource row with this exact email and set its appRole." style={{ color: 'var(--destructive, #c0392b)', fontWeight: 600 }}>
+              unmatched
+            </span>
+          )}
+        </div>
+      </div>
     </aside>
   );
 }
