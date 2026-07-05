@@ -62,6 +62,20 @@ export function PriorityPill({ level }) {
   return <Badge color={TASK_PRIORITY[level]}>{level || '—'}</Badge>;
 }
 
+// A payment is overdue when its due date has passed and it hasn't been settled
+// (still Pending or Invoiced). Paid/already-Overdue rows are left untouched.
+export function isPaymentOverdue(status, dueDate, on) {
+  if (!dueDate || !['Pending', 'Invoiced'].includes(status)) return false;
+  const today = (on ? new Date(on) : new Date()).toISOString().slice(0, 10);
+  return String(dueDate).slice(0, 10) < today;
+}
+
+// The status to *display*: auto-derives "Overdue" from the due date so it shows
+// everywhere immediately, without waiting on a write-back.
+export function effectivePaymentStatus(payment, on) {
+  return isPaymentOverdue(payment.status, payment.dueDate, on) ? 'Overdue' : payment.status;
+}
+
 export function money(amount, currency = 'USD') {
   if (amount == null || amount === '') return '—';
   const n = Number(amount);

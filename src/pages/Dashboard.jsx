@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { useData } from '../context/DataContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
+import { LEAD_ROLES } from '../lib/permissions.js';
 import { Card, CardHeader, CardContent, Button, Skeleton } from '../components/ui/primitives.jsx';
 import { BarChart, DonutChart, ColumnChart } from '../components/charts/Charts.jsx';
 import { fmtDate, money, isActiveOn } from '../components/pills.jsx';
@@ -31,7 +32,7 @@ export function Dashboard() {
 
   // For role-scoped users the "Resources" KPI means their team (distinct people
   // on the projects they can see), not the whole org directory.
-  const scopedToTeam = role === 'Team Lead';
+  const scopedToTeam = LEAD_ROLES.includes(role);
   const resourceCount = scopedToTeam
     ? new Set(ProjectAssignment.map((a) => a.resourceId)).size
     : Resource.length;

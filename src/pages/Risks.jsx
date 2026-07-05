@@ -29,13 +29,13 @@ export function Risks() {
   }, [rows]);
 
   function openNew() {
-    setForm({ projectId: selected, riskTitle: '', description: '', severity: 'Medium', probability: 'Medium', owner: '', mitigation: '', status: 'Open' });
+    setForm({ projectId: selected, title: '', description: '', severity: 'Medium', probability: 'Medium', owner: '', mitigation: '', status: 'Open' });
     setOpen(true);
   }
   function openEdit(r) {
     setForm({
       _spId: r._spId, projectId: r.projectId,
-      riskTitle: r.riskTitle || r.title || '', description: r.description || '',
+      title: r.title || r.riskTitle || '', description: r.description || '',
       severity: r.severity || 'Medium', probability: r.probability || 'Medium',
       owner: r.owner || '', mitigation: r.mitigation || '', status: r.status || 'Open',
     });
@@ -65,7 +65,7 @@ export function Risks() {
           {loading.ProjectRisk ? <CardContent><Skeleton height={120} /></CardContent>
             : <Table empty="No risks logged for this project."
                 columns={[
-                  { key: 'riskTitle', label: 'Title', render: (r) => r.riskTitle || r.title },
+                  { key: 'title', label: 'Title', render: (r) => r.title || r.riskTitle },
                   { key: 'severity', label: 'Severity', render: (r) => <SeverityPill level={r.severity} /> },
                   { key: 'probability', label: 'Probability' },
                   { key: 'owner', label: 'Owner' },
@@ -87,7 +87,7 @@ export function Risks() {
       <Dialog open={open} onClose={() => setOpen(false)} title={form?._spId ? 'Edit risk' : 'New risk'}
         footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save}>{form?._spId ? 'Save' : 'Add risk'}</Button></>}>
         {form && <>
-          <Field label="Title"><Input value={form.riskTitle} onChange={(e) => setForm({ ...form, riskTitle: e.target.value })} /></Field>
+          <Field label="Title"><Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></Field>
           <Field label="Description"><Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <Field label="Severity">

@@ -2,14 +2,15 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { useData } from '../context/DataContext.jsx';
-import { Card, CardContent, Button, Input, Select, Textarea, Field, Skeleton } from '../components/ui/primitives.jsx';
+import { Card, CardContent, Button, Input, Select, Field, Skeleton } from '../components/ui/primitives.jsx';
 import { Dialog } from '../components/ui/Dialog.jsx';
 import { PageHeader } from '../components/Layout.jsx';
 import { RagDot, RagBadge, money, fmtDate } from '../components/pills.jsx';
 import { PRODUCTS } from '../lib/schema.js';
+import { normalizeRole } from '../lib/permissions.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
-const EMPTY = { name: '', client: '', product: PRODUCTS[0], startDate: '', endDate: '', budget: 0, status: 'Planned', ragStatus: 'Green', description: '', managerId: '' };
+const EMPTY = { name: '', client: '', product: PRODUCTS[0], startDate: '', endDate: '', budget: 0, status: 'Planned', ragStatus: 'Green', managerId: '', devLeadId: '', functionalLeadId: '' };
 
 export function Projects() {
   const navigate = useNavigate();
@@ -18,10 +19,15 @@ export function Projects() {
   const canEdit = canWrite('Project');
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY);
+  const [error, setError] = useState('');
+
+  // Each lead picker only lists resources whose access role matches that slot.
+  const byAppRole = (roleName) => data.Resource.filter((r) => normalizeRole(r.appRole) === roleName);
 
   async function save() {
-    const saved = await create('Project', { ...form, budget: Number(form.budget) || 0,
-      projectName: form.name }); // store under projectName col; keep name in shape
+    if (!form.managerId) { setError('Project owner is required.'); return; }
+    setError('');
+    const saved = await create('Project', { ...form, budget: Number(form.budget) || 0 });
     setOpen(false);
     if (saved?.projectId) navigate(`/projects/${saved.projectId}`);
   }
@@ -29,7 +35,7 @@ export function Projects() {
   return (
     <div>
       <PageHeader title="Projects">
-        {canEdit && <Button onClick={() => { setForm(EMPTY); setOpen(true); }}><Plus size={16} /> New Project</Button>}
+        {canEdit && <Button onClick={() => { setForm(EMPTY); setError(''); setOpen(true); }}><Plus size={16} /> New Project</Button>}
       </PageHeader>
 
       {loading.Project ? (
@@ -72,6 +78,11 @@ export function Projects() {
 
       <Dialog open={open} onClose={() => setOpen(false)} title="New project"
         footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save}>Create</Button></>}>
+        {error && (
+          <div style={{ marginBottom: '0.85rem', padding: '0.6rem 0.8rem', borderRadius: 'var(--radius)', background: 'oklch(0.60 0.22 25 / 0.1)', border: '1px solid var(--destructive)', color: 'var(--foreground)', fontSize: '0.82rem' }}>
+            {error}
+          </div>
+        )}
         <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
         <Field label="Client"><Input value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value })} /></Field>
         <Field label="Product">
@@ -96,13 +107,26 @@ export function Projects() {
             </Select>
           </Field>
         </div>
-        <Field label="Project manager (owner)">
+        <Field label="Project manager (owner)" required>
           <Select value={form.managerId} onChange={(e) => setForm({ ...form, managerId: e.target.value })}>
             <option value="">Unassigned</option>
-            {data.Resource.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
+            {byAppRole('Project Manager').map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
           </Select>
         </Field>
-        <Field label="Description"><Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <Field label="Dev Lead">
+            <Select value={form.devLeadId} onChange={(e) => setForm({ ...form, devLeadId: e.target.value })}>
+              <option value="">Unassigned</option>
+              {byAppRole('Dev Lead').map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
+            </Select>
+          </Field>
+          <Field label="Functional Lead">
+            <Select value={form.functionalLeadId} onChange={(e) => setForm({ ...form, functionalLeadId: e.target.value })}>
+              <option value="">Unassigned</option>
+              {byAppRole('Functional Lead').map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
+            </Select>
+          </Field>
+        </div>
       </Dialog>
     </div>
   );

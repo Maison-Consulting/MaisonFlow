@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Plus, Bug, CheckSquare, Clock, Trash2 } from 'lucide-react';
 import { useData } from '../context/DataContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -6,6 +6,8 @@ import { Card, Button, Input, Select, Textarea, Field, Skeleton, Badge } from '.
 import { Dialog } from '../components/ui/Dialog.jsx';
 import { PageHeader } from '../components/Layout.jsx';
 import { PriorityPill, fmtDate } from '../components/pills.jsx';
+import { sendTaskAssignedEmail, sendMentionEmail } from '../lib/notify.js';
+import { graphSearchUsers } from '../lib/graphClient.js';
 
 // Board columns, in order. `status` values must match these labels.
 const COLUMNS = ['New', 'Open', 'In Progress', 'On Hold', 'Resolved', 'Closed'];
@@ -13,6 +15,7 @@ const COLUMNS = ['New', 'Open', 'In Progress', 'On Hold', 'Resolved', 'Closed'];
 const TERMINAL = 'Closed';
 const PRIORITIES = ['Critical', 'High', 'Medium', 'Low'];
 const TYPES = ['Task', 'Bug'];
+const CATEGORIES = ['Dev Task', 'Functional Task'];
 
 // Status-change log: compact JSON in the statusHistory column — [{ s, at }],
 // where s = status and at = ISO timestamp of when the task entered it.
@@ -41,11 +44,13 @@ function fmtDateTime(iso) {
   return d.toISOString().slice(0, 16).replace('T', ' ');
 }
 
-const blankTask = (projectId) => ({
+const blankTask = (projectId, parentId = '') => ({
   projectId,
+  parentId,
   Title: '',
   description: '',
   workItemType: 'Task',
+  category: 'Dev Task',
   status: 'New',
   priority: 'Medium',
   assigneeId: '',
@@ -56,20 +61,44 @@ const blankTask = (projectId) => ({
   dueDate: '',
   labels: '',
   boardOrder: 0,
+  discussion: '',
 });
+
+// Discussion thread: compact JSON in the `discussion` column — [{ a, t, at }],
+// where a = author name, t = comment text, at = ISO timestamp.
+function parseDiscussion(raw) {
+  if (!raw) return [];
+  try { const d = JSON.parse(raw); return Array.isArray(d) ? d : []; } catch { return []; }
+}
 
 export function Tasks() {
   const { data, loading, create, update, remove } = useData();
-  const { canWrite } = useAuth();
+  const { canWrite, me, email } = useAuth();
   const canEdit = canWrite('ProjectTask');
   const [projectId, setProjectId] = useState('');
+  const [selectedParentId, setSelectedParentId] = useState('');
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(null);
+  const [comment, setComment] = useState('');
+  const [orgUsers, setOrgUsers] = useState([]);      // org directory matches for @mention
+  const [mentionedMap, setMentionedMap] = useState({}); // fullName → email, for people picked from suggestions
   const [dragId, setDragId] = useState(null);
   const [dragOverCol, setDragOverCol] = useState(null);
 
   const projects = data.Project;
   const selected = projectId || projects[0]?.projectId || '';
+  const selectedProject = projects.find((p) => p.projectId === selected);
+  const projName = selectedProject?.projectName || selectedProject?.name || '';
+
+  // Best-effort assignment email: notify the assignee their task was assigned.
+  function emailAssignee(assigneeId, task) {
+    const r = data.Resource.find((x) => x.resourceId === assigneeId);
+    if (!r?.email) return;
+    sendTaskAssignedEmail({
+      to: r.email, toName: r.fullName, taskTitle: task.Title,
+      projectName: projName, assignedBy: me?.fullName || email || 'Someone',
+    }).catch(() => {}); // email is best-effort; never block the task action
+  }
 
   // resourceId → display name, for showing assignees on cards.
   const resourceName = useMemo(() => {
@@ -93,21 +122,70 @@ export function Tasks() {
     [data.ProjectTask, selected]
   );
 
-  // Group tasks by status column, each sorted by boardOrder.
+  // Two levels: parent-level tasks (no parentId) group the board; sub-tasks
+  // (parentId set) are what the kanban shows, filtered to the active parent.
+  const parents = useMemo(() => tasks.filter((t) => !t.parentId), [tasks]);
+  const activeParentId = selectedParentId && parents.some((p) => p.taskId === selectedParentId)
+    ? selectedParentId
+    : (parents[0]?.taskId || '');
+  const activeParent = parents.find((p) => p.taskId === activeParentId) || null;
+  const subtasks = useMemo(
+    () => tasks.filter((t) => t.parentId && t.parentId === activeParentId),
+    [tasks, activeParentId]
+  );
+
+  // Group sub-tasks by status column, each sorted by boardOrder.
   const byColumn = useMemo(() => {
     const g = Object.fromEntries(COLUMNS.map((c) => [c, []]));
-    for (const t of tasks) (g[t.status] || g.New).push(t);
+    for (const t of subtasks) (g[t.status] || g.New).push(t);
     for (const c of COLUMNS) g[c].sort((a, b) => (Number(a.boardOrder) || 0) - (Number(b.boardOrder) || 0));
     return g;
-  }, [tasks]);
+  }, [subtasks]);
 
-  function openNew() {
-    setForm(blankTask(selected));
+  function openNewParent() {
+    setComment('');
+    setForm(blankTask(selected, ''));
+    setOpen(true);
+  }
+  function openNewSubtask() {
+    setComment('');
+    setForm(blankTask(selected, activeParentId));
     setOpen(true);
   }
   function openEdit(task) {
+    setComment('');
     setForm({ ...task });
     setOpen(true);
+  }
+
+  // Append a comment to the task's discussion thread (attributed to the
+  // signed-in user) and persist immediately.
+  async function postComment() {
+    const text = comment.trim();
+    if (!text || !form?._spId) return;
+    const author = me?.fullName || email || 'Unknown';
+    const next = [...parseDiscussion(form.discussion), { a: author, t: text, at: new Date().toISOString() }];
+    const discussion = JSON.stringify(next);
+    await update('ProjectTask', form._spId, { discussion });
+    setForm((f) => ({ ...f, discussion }));
+    // Email anyone @mentioned (best-effort). Combine people picked from the
+    // suggestion list (mentionedMap: covers org-directory users) with local
+    // Resource names found in the text — dedup by email.
+    const targets = new Map(); // email → name
+    Object.entries(mentionedMap).forEach(([name, mail]) => {
+      if (mail && text.includes(`@${name}`)) targets.set(mail.toLowerCase(), name);
+    });
+    data.Resource.forEach((r) => {
+      if (r.email && r.fullName && text.includes(`@${r.fullName}`)) targets.set(r.email.toLowerCase(), r.fullName);
+    });
+    targets.forEach((name, mail) => {
+      sendMentionEmail({
+        to: mail, toName: name, taskTitle: form.Title,
+        projectName: projName, mentionedBy: author, comment: text,
+      }).catch(() => {});
+    });
+    setComment('');
+    setMentionedMap({});
   }
 
   async function save() {
@@ -124,12 +202,15 @@ export function Tasks() {
       // Log a transition if the status was changed from the dialog.
       if (orig && orig.status !== patch.status) patch.statusHistory = pushStatus(orig, patch.status);
       await update('ProjectTask', _spId, patch);
+      // Email the assignee only when the assignment actually changed.
+      if (patch.assigneeId && orig?.assigneeId !== patch.assigneeId) emailAssignee(patch.assigneeId, patch);
     } else {
       // New card lands at the bottom of its column; seed the history with the
       // initial status so time-in-stage is measured from creation.
       payload.boardOrder = nextOrder(form.status);
       payload.statusHistory = JSON.stringify([{ s: form.status, at: new Date().toISOString() }]);
       await create('ProjectTask', payload);
+      if (payload.assigneeId) emailAssignee(payload.assigneeId, payload);
     }
     setOpen(false);
   }
@@ -153,6 +234,7 @@ export function Tasks() {
   async function changeAssignee(task, assigneeId) {
     if ((task.assigneeId || '') === assigneeId) return;
     await update('ProjectTask', task._spId, { assigneeId });
+    if (assigneeId) emailAssignee(assigneeId, task);
   }
 
   // Explicitly reopen a Done task (the only way out, since status is locked).
@@ -209,14 +291,64 @@ export function Tasks() {
   // Fields are also frozen for roles that can't write tasks (read-only view).
   const formLocked = locked || !canEdit;
 
+  // @mention autocomplete: read the text after the last '@' as the query.
+  const mentionMatch = /@([^@\n]*)$/.exec(comment);
+  const mentionQuery = mentionMatch && !mentionMatch[1].endsWith(' ') ? mentionMatch[1].trim() : null;
+
+  // Search the org directory (debounced) whenever the @query changes. Best-effort:
+  // if User.ReadBasic.All isn't consented, we silently fall back to local results.
+  useEffect(() => {
+    if (mentionQuery === null || mentionQuery.length < 2) { setOrgUsers([]); return; }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      graphSearchUsers(mentionQuery)
+        .then((u) => { if (!cancelled) setOrgUsers(u); })
+        .catch(() => { if (!cancelled) setOrgUsers([]); });
+    }, 250);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [mentionQuery]);
+
+  // Merge local Resource matches with org-directory matches (dedup by email).
+  const mentionSuggestions = useMemo(() => {
+    if (mentionQuery === null) return [];
+    const q = mentionQuery.toLowerCase();
+    const local = data.Resource
+      .filter((r) => r.fullName && (r.fullName.toLowerCase().includes(q) || (r.email || '').toLowerCase().includes(q)))
+      .map((r) => ({ key: `r-${r._spId}`, name: r.fullName, email: r.email || '' }));
+    const seen = new Set(local.map((m) => m.email.toLowerCase()).filter(Boolean));
+    const org = orgUsers
+      .map((u) => ({ key: `o-${u.id}`, name: u.displayName, email: u.mail || u.userPrincipalName || '' }))
+      .filter((m) => m.name && m.email && !seen.has(m.email.toLowerCase()));
+    return [...local, ...org].slice(0, 8);
+  }, [mentionQuery, data.Resource, orgUsers]);
+
+  // Insert the picked name and remember its email so we can notify on post.
+  const insertMention = (m) => {
+    setComment((c) => c.replace(/@([^@\n]*)$/, `@${m.name} `));
+    if (m.email) setMentionedMap((prev) => ({ ...prev, [m.name]: m.email }));
+  };
+
   return (
     <div>
       <PageHeader title="Task Board">
-        <Select value={selected} onChange={(e) => setProjectId(e.target.value)} style={{ width: 200 }}>
+        <Select value={selected} onChange={(e) => { setProjectId(e.target.value); setSelectedParentId(''); }} style={{ width: 170 }}>
           {projects.map((p) => <option key={p._spId} value={p.projectId}>{p.projectName || p.name}</option>)}
         </Select>
-        {canEdit && <Button onClick={openNew} disabled={!selected}><Plus size={16} /> New task</Button>}
+        <Select value={activeParentId} onChange={(e) => setSelectedParentId(e.target.value)} style={{ width: 190 }} disabled={!parents.length} title="Filter board by parent">
+          {parents.length
+            ? parents.map((p) => <option key={p._spId} value={p.taskId}>{p.Title || '(untitled parent)'}</option>)
+            : <option value="">No parents yet</option>}
+        </Select>
+        {canEdit && activeParent && <Button variant="ghost" size="sm" onClick={() => openEdit(activeParent)}>Edit parent</Button>}
+        {canEdit && <Button variant="outline" onClick={openNewParent} disabled={!selected}><Plus size={16} /> New parent</Button>}
+        {canEdit && <Button onClick={openNewSubtask} disabled={!selected || !parents.length}><Plus size={16} /> New sub-task</Button>}
       </PageHeader>
+
+      {!loading.ProjectTask && selected && !parents.length && (
+        <div style={{ marginBottom: 12, padding: '0.7rem 0.9rem', borderRadius: 'var(--radius)', background: 'var(--muted)', color: 'var(--muted-foreground)', fontSize: '0.85rem' }}>
+          No parent tasks yet. Create a <strong>parent</strong> first, then add sub-tasks under it — the board shows a parent's sub-tasks.
+        </div>
+      )}
 
       {loading.ProjectTask ? (
         <div style={{ display: 'flex', gap: 12 }}>
@@ -267,7 +399,7 @@ export function Tasks() {
       <Dialog
         open={open}
         onClose={() => setOpen(false)}
-        title={form?._spId ? 'Edit task' : 'New task'}
+        title={`${form?._spId ? 'Edit' : 'New'} ${form?.parentId ? 'sub-task' : 'parent'}`}
         width={560}
         footer={
           <>
@@ -279,7 +411,7 @@ export function Tasks() {
             <Button variant="outline" onClick={() => setOpen(false)}>{canEdit ? 'Cancel' : 'Close'}</Button>
             {canEdit && (locked
               ? <Button onClick={reopen}>Reopen</Button>
-              : <Button onClick={save}>{form?._spId ? 'Save' : 'Create task'}</Button>)}
+              : <Button onClick={save}>{form?._spId ? 'Save' : (form?.parentId ? 'Create sub-task' : 'Create parent')}</Button>)}
           </>
         }
       >
@@ -291,12 +423,28 @@ export function Tasks() {
               </div>
             )}
             <Field label="Title" required>
-              <Input value={form.Title} disabled={formLocked} onChange={(e) => setForm({ ...form, Title: e.target.value })} placeholder="What needs doing?" />
+              <Input value={form.Title} disabled={formLocked} onChange={(e) => setForm({ ...form, Title: e.target.value })} placeholder={form.parentId ? 'What needs doing?' : 'Name this parent'} />
             </Field>
+            {form.parentId ? (
+              <Field label="Parent">
+                <Select value={form.parentId} disabled={formLocked} onChange={(e) => setForm({ ...form, parentId: e.target.value })}>
+                  {parents.map((p) => <option key={p._spId} value={p.taskId}>{p.Title || '(untitled parent)'}</option>)}
+                </Select>
+              </Field>
+            ) : (
+              <div style={{ marginBottom: '0.85rem', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius)', background: 'var(--muted)', fontSize: '0.8rem', color: 'var(--muted-foreground)' }}>
+                This is a <strong>parent</strong> task. Sub-tasks added under it appear on the board when it's selected.
+              </div>
+            )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <Field label="Type">
                 <Select value={form.workItemType} disabled={formLocked} onChange={(e) => setForm({ ...form, workItemType: e.target.value })}>
                   {TYPES.map((t) => <option key={t}>{t}</option>)}
+                </Select>
+              </Field>
+              <Field label="Category">
+                <Select value={form.category || CATEGORIES[0]} disabled={formLocked} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+                  {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
                 </Select>
               </Field>
               <Field label="Status">
@@ -344,6 +492,41 @@ export function Tasks() {
               <div>
                 <span style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, marginBottom: '0.4rem', color: 'var(--muted-foreground)' }}>Stage history</span>
                 <StageTimeline history={parseHistory(form.statusHistory)} />
+              </div>
+            )}
+            {form._spId && (
+              <div style={{ marginTop: 16 }}>
+                <span style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, marginBottom: '0.4rem', color: 'var(--muted-foreground)' }}>Discussion</span>
+                <DiscussionThread comments={parseDiscussion(form.discussion)} />
+                {canEdit && (
+                  <div style={{ position: 'relative', marginTop: 8 }}>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Input
+                        value={comment}
+                        placeholder="Write a comment… type @ to mention"
+                        onChange={(e) => setComment(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key !== 'Enter') return;
+                          if (mentionSuggestions.length) { e.preventDefault(); insertMention(mentionSuggestions[0]); }
+                          else if (comment.trim()) postComment();
+                        }}
+                      />
+                      <Button onClick={postComment} disabled={!comment.trim()}>Post</Button>
+                    </div>
+                    {mentionSuggestions.length > 0 && (
+                      <div style={{ position: 'absolute', bottom: '100%', left: 0, marginBottom: 4, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.12)', zIndex: 30, minWidth: 200, overflow: 'hidden' }}>
+                        {mentionSuggestions.map((m) => (
+                          <button key={m.key} onClick={() => insertMention(m)} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '0.45rem 0.75rem', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--foreground)' }}
+                            onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--muted)')}
+                            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}>
+                            <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>{m.name}</div>
+                            {m.email && <div style={{ fontSize: '0.72rem', color: 'var(--muted-foreground)' }}>{m.email}</div>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </>
@@ -429,6 +612,26 @@ function TaskCard({ task, assignee, dragging, onDragStart, onDragEnd, onDrop, on
         </select>
       </div>
     </Card>
+  );
+}
+
+// Comment thread rendered from the task's discussion JSON, newest last.
+function DiscussionThread({ comments }) {
+  if (!comments.length) {
+    return <div style={{ fontSize: '0.8rem', color: 'var(--muted-foreground)' }}>No comments yet.</div>;
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {comments.map((c, i) => (
+        <div key={i} style={{ background: 'var(--muted)', borderRadius: 'var(--radius)', padding: '0.5rem 0.7rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
+            <span style={{ fontWeight: 700, fontSize: '0.8rem' }}>{c.a || 'Unknown'}</span>
+            <span style={{ fontSize: '0.72rem', color: 'var(--muted-foreground)' }}>{fmtDateTime(c.at)}</span>
+          </div>
+          <div style={{ fontSize: '0.85rem', whiteSpace: 'pre-wrap' }}>{c.t}</div>
+        </div>
+      ))}
+    </div>
   );
 }
 

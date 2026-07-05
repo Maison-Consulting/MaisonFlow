@@ -85,7 +85,7 @@ export function SummaryReport() {
 
       <Section title="Open risks (by severity)">
         <Table empty="No open risks."
-          columns={[{ key: 'riskTitle', label: 'Title', render: (r) => r.riskTitle || r.title }, { key: 'severity', label: 'Severity', render: (r) => <SeverityPill level={r.severity} /> }, { key: 'owner', label: 'Owner' }, { key: 'status', label: 'Status' }]}
+          columns={[{ key: 'title', label: 'Title', render: (r) => r.title || r.riskTitle }, { key: 'severity', label: 'Severity', render: (r) => <SeverityPill level={r.severity} /> }, { key: 'owner', label: 'Owner' }, { key: 'status', label: 'Status' }]}
           rows={openRisks} />
       </Section>
 

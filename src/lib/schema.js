@@ -66,7 +66,7 @@ export const SCHEMA = [
     name: 'Project',
     columns: [
       { name: 'projectId', kind: T },
-      { name: 'projectName', kind: T },
+      { name: 'name', kind: T },
       { name: 'client', kind: T },
       { name: 'product', kind: T },
       { name: 'startDate', kind: DATE },
@@ -74,8 +74,9 @@ export const SCHEMA = [
       { name: 'budget', kind: NUM },
       { name: 'status', kind: T },
       { name: 'ragStatus', kind: T },
-      { name: 'description', kind: NOTE },
       { name: 'managerId', kind: T }, // FK → Resource: the project's owner/PM (record scoping)
+      { name: 'devLeadId', kind: T }, // FK → Resource: the project's Dev Lead
+      { name: 'functionalLeadId', kind: T }, // FK → Resource: the project's Functional Lead
     ],
   },
   {
@@ -119,9 +120,12 @@ export const SCHEMA = [
     columns: [
       { name: 'taskId', kind: T },
       { name: 'projectId', kind: T },        // FK → Project
+      { name: 'parentId', kind: T },         // FK → ProjectTask.taskId; empty = parent-level task, set = sub-task
       // Task name lives in the built-in Title column (no separate column needed).
       { name: 'description', kind: NOTE },
+      { name: 'discussion', kind: NOTE },    // JSON comment thread: [{ a: author, t: text, at: ISO }]
       { name: 'workItemType', kind: T },     // Task | Bug
+      { name: 'category', kind: T },         // Dev Task | Functional Task
       { name: 'status', kind: T },           // New | Open | In Progress | On Hold | Resolved | Closed
       { name: 'priority', kind: T },         // Critical | High | Medium | Low
       { name: 'assigneeId', kind: T },       // FK → Resource (who it's assigned to)
@@ -141,7 +145,7 @@ export const SCHEMA = [
     columns: [
       { name: 'riskId', kind: T },
       { name: 'projectId', kind: T },
-      { name: 'riskTitle', kind: T },
+      { name: 'title', kind: T },
       { name: 'description', kind: NOTE },
       { name: 'severity', kind: T },
       { name: 'probability', kind: T },
@@ -172,6 +176,7 @@ export const SCHEMA = [
       { name: 'currency', kind: T },
       { name: 'dueDate', kind: DATE },
       { name: 'invoiceNumber', kind: T },
+      { name: 'invoiceDate', kind: DATE }, // date the invoice was issued (shown when status is Invoiced/Paid)
       { name: 'status', kind: T },
     ],
   },

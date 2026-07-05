@@ -21,7 +21,17 @@ export function Layout() {
     setProvisioning(true);
     try {
       const res = await ensureProvisioned();
-      toast(res.created.length ? `Provisioned ${res.created.length} list(s)` : 'All lists already exist');
+      const parts = [];
+      if (res.created.length) parts.push(`${res.created.length} list(s)`);
+      if (res.columnsAdded?.length) parts.push(`${res.columnsAdded.length} column(s)`);
+      if (res.errors?.length) {
+        // Surface what worked, then flag what didn't (usually a SharePoint
+        // permission block — needs a site owner or elevated Graph scope).
+        const done = parts.length ? `Provisioned ${parts.join(' + ')}. ` : '';
+        toast(`${done}${res.errors.length} item(s) blocked (access denied): ${res.errors.map((e) => e.target).join(', ')}`, 'error');
+      } else {
+        toast(parts.length ? `Provisioned ${parts.join(' + ')}` : 'Schema already up to date');
+      }
       reload();
     } catch (err) {
       toast(`Provisioning failed: ${err.message}`, 'error');

@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { Card, CardContent, Button, Input, Select, Field, Skeleton } from '../components/ui/primitives.jsx';
 import { Dialog, Table } from '../components/ui/Dialog.jsx';
 import { PageHeader } from '../components/Layout.jsx';
-import { PaymentStatusPill, money, fmtDate } from '../components/pills.jsx';
+import { PaymentStatusPill, money, fmtDate, isPaymentOverdue, effectivePaymentStatus } from '../components/pills.jsx';
 
 const FILTERS = ['All', 'Pending', 'Invoiced', 'Paid', 'Overdue'];
 const iconBtnStyle = { display: 'inline-flex', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--muted-foreground)', padding: 4, borderRadius: 6 };
@@ -21,11 +21,12 @@ export function Payments() {
 
   const projectName = (pid) => { const p = data.Project.find((x) => x.projectId === pid); return p?.projectName || p?.name || pid; };
 
-  // Auto-flag overdue: dueDate < today and status in {Pending, Invoiced} (spec §6.11).
+  // Auto-flag overdue: dueDate passed and status in {Pending, Invoiced} (spec §6.11).
+  // Display already derives Overdue live (effectivePaymentStatus); this persists
+  // it back so totals/filters/reports stay consistent for write-capable users.
   useEffect(() => {
     if (flagged.current || loading.ProjectPayment || !canEdit) return;
-    const today = new Date().toISOString().slice(0, 10);
-    const toFlag = data.ProjectPayment.filter((p) => p.dueDate && p.dueDate < today && ['Pending', 'Invoiced'].includes(p.status));
+    const toFlag = data.ProjectPayment.filter((p) => isPaymentOverdue(p.status, p.dueDate));
     if (toFlag.length) {
       flagged.current = true;
       toFlag.forEach((p) => update('ProjectPayment', p._spId, { status: 'Overdue' }).catch(() => {}));
@@ -33,26 +34,27 @@ export function Payments() {
   }, [data.ProjectPayment, loading.ProjectPayment, update]);
 
   const rows = useMemo(() =>
-    data.ProjectPayment.filter((p) => filter === 'All' || p.status === filter),
+    data.ProjectPayment.filter((p) => filter === 'All' || effectivePaymentStatus(p) === filter),
     [data.ProjectPayment, filter]);
 
   const totals = useMemo(() => {
     const t = { Paid: 0, Outstanding: 0, Overdue: 0 };
     data.ProjectPayment.forEach((p) => {
       const amt = Number(p.amount || 0);
-      if (p.status === 'Paid') t.Paid += amt;
-      else if (p.status === 'Overdue') t.Overdue += amt;
+      const status = effectivePaymentStatus(p);
+      if (status === 'Paid') t.Paid += amt;
+      else if (status === 'Overdue') t.Overdue += amt;
       else t.Outstanding += amt;
     });
     return t;
   }, [data.ProjectPayment]);
 
   function openNew() {
-    setForm({ projectId: data.Project[0]?.projectId || '', milestone: '', amount: 0, currency: 'USD', dueDate: '', invoiceNumber: '', status: 'Pending' });
+    setForm({ projectId: data.Project[0]?.projectId || '', milestone: '', amount: 0, currency: 'USD', dueDate: '', invoiceNumber: '', invoiceDate: '', status: 'Pending' });
     setOpen(true);
   }
   function openEdit(row) {
-    setForm({ _spId: row._spId, projectId: row.projectId, milestone: row.milestone || '', amount: row.amount ?? 0, currency: row.currency || 'USD', dueDate: row.dueDate ? String(row.dueDate).slice(0, 10) : '', invoiceNumber: row.invoiceNumber || '', status: row.status || 'Pending' });
+    setForm({ _spId: row._spId, projectId: row.projectId, milestone: row.milestone || '', amount: row.amount ?? 0, currency: row.currency || 'USD', dueDate: row.dueDate ? String(row.dueDate).slice(0, 10) : '', invoiceNumber: row.invoiceNumber || '', invoiceDate: row.invoiceDate ? String(row.invoiceDate).slice(0, 10) : '', status: row.status || 'Pending' });
     setOpen(true);
   }
   async function save() {
@@ -89,7 +91,8 @@ export function Payments() {
                 { key: 'milestone', label: 'Milestone' },
                 { key: 'amount', label: 'Amount', render: (r) => money(r.amount, r.currency) },
                 { key: 'dueDate', label: 'Due Date', render: (r) => fmtDate(r.dueDate) },
-                { key: 'status', label: 'Status', render: (r) => <PaymentStatusPill status={r.status} /> },
+                { key: 'invoiceDate', label: 'Invoiced', render: (r) => fmtDate(r.invoiceDate) },
+                { key: 'status', label: 'Status', render: (r) => <PaymentStatusPill status={effectivePaymentStatus(r)} /> },
                 ...(canEdit ? [{ key: '_actions', label: '', sortable: false, width: 80, render: (r) => (
                   <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
                     <button onClick={() => openEdit(r)} aria-label="Edit" title="Edit" style={iconBtnStyle}><Pencil size={15} /></button>
@@ -123,6 +126,9 @@ export function Payments() {
               <option>Pending</option><option>Invoiced</option><option>Paid</option><option>Overdue</option>
             </Select>
           </Field>
+          {['Invoiced', 'Paid'].includes(form.status) && (
+            <Field label="Invoice date"><Input type="date" value={form.invoiceDate || ''} onChange={(e) => setForm({ ...form, invoiceDate: e.target.value })} /></Field>
+          )}
         </>}
       </Dialog>
     </div>

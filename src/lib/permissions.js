@@ -7,12 +7,16 @@
 // behind an API. These rules drive what the app *shows and offers* per role.
 // ─────────────────────────────────────────────────────────────────────────
 
-export const ROLES = ['Admin', 'Project Manager', 'Team Lead', 'Consultant', 'Viewer'];
+export const ROLES = ['Admin', 'Project Manager', 'Dev Lead', 'Functional Lead', 'Consultant', 'Viewer'];
 export const DEFAULT_ROLE = 'Viewer';
 
+// Lead roles: scoped to the projects they lead, with the same access footprint.
+// (Formerly a single "Team Lead"; split into Dev/Functional leads.)
+export const LEAD_ROLES = ['Dev Lead', 'Functional Lead'];
+
 // The role a person plays ON a specific project (the assignment's `role` field).
-// A Team Lead's project scope is driven by assignments tagged 'Team Lead'.
-export const PROJECT_ROLES = ['Project Manager', 'Team Lead', 'Consultant'];
+// A lead's project scope is driven by assignments tagged with a lead role.
+export const PROJECT_ROLES = ['Project Manager', 'Dev Lead', 'Functional Lead', 'Consultant'];
 
 // Module keys mirror route path slugs ('' route → 'dashboard').
 export const MODULES = [
@@ -45,11 +49,15 @@ const ROLE_CONFIG = {
     write: ['resource-skills', 'projects', 'project-skills', 'assignments', 'tasks', 'tracking', 'risks', 'meetings', 'payments'],
   },
 
-  // Sees only projects he's assigned to; can manage their assignments & tasks,
-  // and view their payment plan.
-  'Team Lead': {
+  // Sees only projects he leads; can manage their assignments & tasks, and view
+  // their payment plan. Dev Lead and Functional Lead share this footprint.
+  'Dev Lead': {
     view: ['dashboard', 'projects', 'assignments', 'tasks', 'tracking', 'payments', 'report'],
-    write: ['assignments', 'tasks'],
+    write: ['projects', 'assignments', 'tasks'],
+  },
+  'Functional Lead': {
+    view: ['dashboard', 'projects', 'assignments', 'tasks', 'tracking', 'payments', 'report'],
+    write: ['projects', 'assignments', 'tasks'],
   },
 
   // Sees only his own records (read-only).
@@ -68,9 +76,14 @@ const ROLE_CONFIG = {
 // Map a stored appRole value back to its canonical ROLES entry, tolerating
 // leading/trailing whitespace and any casing (" admin " → "Admin"). Returns
 // null if it matches no known role, so callers can fall back to DEFAULT_ROLE.
+// Legacy role names → current canonical role. Keeps already-stored values
+// working after a rename so nobody silently drops to Viewer.
+const ROLE_ALIASES = { 'team lead': 'Dev Lead' };
+
 export function normalizeRole(raw) {
   if (!raw) return null;
   const key = String(raw).trim().toLowerCase();
+  if (ROLE_ALIASES[key]) return ROLE_ALIASES[key];
   return ROLES.find((r) => r.toLowerCase() === key) || null;
 }
 
@@ -116,12 +129,13 @@ export function scopeData(rawData, me, role) {
   // Full-visibility roles (Viewer sees all but can't write — gated elsewhere).
   if (role === 'Admin' || role === 'Viewer' || role === 'Project Manager' || !me) return rawData;
 
-  // Team Lead: every record on the projects where he is assigned AS the lead
-  // (the assignment's role on the project is 'Team Lead').
-  if (role === 'Team Lead') {
+  // Lead (Dev/Functional): every record on the projects where he is assigned AS
+  // a lead (the assignment's role is a lead role; 'Team Lead' kept for legacy data).
+  if (LEAD_ROLES.includes(role)) {
+    const leadAssignmentRoles = new Set([...LEAD_ROLES, 'Team Lead']);
     const ids = new Set(
       rawData.ProjectAssignment
-        .filter((a) => a.resourceId === me.resourceId && a.role === 'Team Lead')
+        .filter((a) => a.resourceId === me.resourceId && leadAssignmentRoles.has(a.role))
         .map((a) => a.projectId)
     );
     const scoped = { ...rawData };
