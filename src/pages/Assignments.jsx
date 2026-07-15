@@ -19,8 +19,10 @@ const iconBtnStyle = { display: 'inline-flex', background: 'transparent', border
 
 export function Assignments() {
   const { data, loading, create, update, remove } = useData();
-  const { canWrite } = useAuth();
+  const { canWrite, canManageProject } = useAuth();
   const canEdit = canWrite('ProjectAssignment');
+  // Assignments can only be managed on projects the user leads (or as Admin).
+  const manageableProjects = data.Project.filter((p) => canManageProject(p.projectId));
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -48,7 +50,7 @@ export function Assignments() {
     return flag;
   }, [data.ProjectAssignment, data.Resource]);
 
-  function openNew() { setForm({ projectId: data.Project[0]?.projectId || '', resourceId: data.Resource[0]?.resourceId || '', allocationPercent: 50, startDate: '', endDate: '', role: 'Consultant' }); setOpen(true); }
+  function openNew() { setForm({ projectId: manageableProjects[0]?.projectId || '', resourceId: data.Resource[0]?.resourceId || '', allocationPercent: 50, startDate: '', endDate: '', role: 'Consultant' }); setOpen(true); }
   function openEdit(r) {
     setForm({
       _spId: r._spId,
@@ -90,7 +92,7 @@ export function Assignments() {
 
   return (
     <div>
-      <PageHeader title="Assignments">{canEdit && <Button onClick={openNew}><Plus size={16} /> Add</Button>}</PageHeader>
+      <PageHeader title="Assignments">{canEdit && manageableProjects.length > 0 && <Button onClick={openNew}><Plus size={16} /> Add</Button>}</PageHeader>
 
       {overAllocated.size > 0 && (
         <div style={{ marginBottom: 12, padding: '0.7rem 1rem', borderRadius: 'var(--radius)', background: 'oklch(0.82 0.16 80 / 0.18)', border: '1px solid var(--secondary)', display: 'flex', gap: 8, alignItems: 'center', fontSize: '0.85rem' }}>
@@ -138,10 +140,12 @@ export function Assignments() {
                   </span>
                 ) },
                 ...(canEdit ? [{ key: '_actions', label: '', sortable: false, width: 80, render: (r) => (
-                  <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-                    <button onClick={() => openEdit(r)} aria-label="Edit" title="Edit" style={iconBtnStyle}><Pencil size={15} /></button>
-                    <button onClick={() => del(r)} aria-label="Delete" title="Delete" style={{ ...iconBtnStyle, color: 'var(--destructive)' }}><Trash2 size={15} /></button>
-                  </div>
+                  canManageProject(r.projectId) ? (
+                    <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                      <button onClick={() => openEdit(r)} aria-label="Edit" title="Edit" style={iconBtnStyle}><Pencil size={15} /></button>
+                      <button onClick={() => del(r)} aria-label="Delete" title="Delete" style={{ ...iconBtnStyle, color: 'var(--destructive)' }}><Trash2 size={15} /></button>
+                    </div>
+                  ) : null
                 ) }] : []),
               ]} rows={rows} />}
       </Card>
@@ -149,7 +153,7 @@ export function Assignments() {
       <Dialog open={open} onClose={() => setOpen(false)} title={form?._spId ? 'Edit assignment' : 'Add assignment'}
         footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save} disabled={saving}>{saving ? 'Saving…' : (form?._spId ? 'Save' : 'Add')}</Button></>}>
         {form && <>
-          <Field label="Project"><Select value={form.projectId} onChange={(e) => setForm({ ...form, projectId: e.target.value })}>{data.Project.map((p) => <option key={p._spId} value={p.projectId}>{p.projectName || p.name}</option>)}</Select></Field>
+          <Field label="Project"><Select value={form.projectId} onChange={(e) => setForm({ ...form, projectId: e.target.value })}>{manageableProjects.map((p) => <option key={p._spId} value={p.projectId}>{p.projectName || p.name}</option>)}</Select></Field>
           <Field label="Resource"><Select value={form.resourceId} onChange={(e) => setForm({ ...form, resourceId: e.target.value })}>{data.Resource.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}</Select></Field>
           <Field label="Role on project"><Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>{PROJECT_ROLES.map((r) => <option key={r}>{r}</option>)}</Select></Field>
           <Field label={`Allocation (${form.allocationPercent}%)`}><Input type="range" min={0} max={100} value={form.allocationPercent} onChange={(e) => setForm({ ...form, allocationPercent: e.target.value })} /></Field>

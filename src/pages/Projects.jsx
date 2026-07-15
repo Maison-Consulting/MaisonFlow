@@ -1,13 +1,12 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { Plus, Search } from 'lucide-react';
 import { useData } from '../context/DataContext.jsx';
 import { Card, CardContent, Button, Input, Select, Field, Skeleton } from '../components/ui/primitives.jsx';
 import { Dialog } from '../components/ui/Dialog.jsx';
 import { PageHeader } from '../components/Layout.jsx';
 import { RagDot, RagBadge, money, fmtDate } from '../components/pills.jsx';
 import { PRODUCTS } from '../lib/schema.js';
-import { normalizeRole } from '../lib/permissions.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
 const EMPTY = { name: '', client: '', product: PRODUCTS[0], startDate: '', endDate: '', budget: 0, status: 'Planned', ragStatus: 'Green', managerId: '', devLeadId: '', functionalLeadId: '' };
@@ -20,9 +19,13 @@ export function Projects() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY);
   const [error, setError] = useState('');
+  const [query, setQuery] = useState('');
 
-  // Each lead picker only lists resources whose access role matches that slot.
-  const byAppRole = (roleName) => data.Resource.filter((r) => normalizeRole(r.appRole) === roleName);
+  const filtered = data.Project.filter((p) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    return [(p.projectName || p.name), p.client, p.status, p.product].some((v) => (v || '').toLowerCase().includes(q));
+  });
 
   async function save() {
     if (!form.managerId) { setError('Project owner is required.'); return; }
@@ -35,6 +38,10 @@ export function Projects() {
   return (
     <div>
       <PageHeader title="Projects">
+        <div style={{ position: 'relative' }}>
+          <Search size={15} style={{ position: 'absolute', left: 10, top: 9, color: 'var(--muted-foreground)' }} />
+          <Input placeholder="Search projects…" value={query} onChange={(e) => setQuery(e.target.value)} style={{ paddingLeft: 30, width: 220 }} />
+        </div>
         {canEdit && <Button onClick={() => { setForm(EMPTY); setError(''); setOpen(true); }}><Plus size={16} /> New Project</Button>}
       </PageHeader>
 
@@ -44,9 +51,11 @@ export function Projects() {
         </div>
       ) : data.Project.length === 0 ? (
         <Card><CardContent><div style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--muted-foreground)' }}>No projects yet. Create your first one.</div></CardContent></Card>
+      ) : filtered.length === 0 ? (
+        <Card><CardContent><div style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--muted-foreground)' }}>No projects match “{query}”.</div></CardContent></Card>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
-          {data.Project.map((p) => {
+          {filtered.map((p) => {
             const name = p.projectName || p.name;
             const pct = p.budget ? Math.min(100, 60) : 0; // budget bar placeholder (no spend field in schema)
             return (
@@ -110,20 +119,20 @@ export function Projects() {
         <Field label="Project manager (owner)" required>
           <Select value={form.managerId} onChange={(e) => setForm({ ...form, managerId: e.target.value })}>
             <option value="">Unassigned</option>
-            {byAppRole('Project Manager').map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
+            {data.Resource.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
           </Select>
         </Field>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <Field label="Dev Lead">
             <Select value={form.devLeadId} onChange={(e) => setForm({ ...form, devLeadId: e.target.value })}>
               <option value="">Unassigned</option>
-              {byAppRole('Dev Lead').map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
+              {data.Resource.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
             </Select>
           </Field>
           <Field label="Functional Lead">
             <Select value={form.functionalLeadId} onChange={(e) => setForm({ ...form, functionalLeadId: e.target.value })}>
               <option value="">Unassigned</option>
-              {byAppRole('Functional Lead').map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
+              {data.Resource.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
             </Select>
           </Field>
         </div>

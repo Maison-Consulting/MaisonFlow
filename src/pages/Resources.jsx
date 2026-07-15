@@ -12,6 +12,11 @@ import { useAuth } from '../context/AuthContext.jsx';
 
 const EMPTY = { fullName: '', email: '', role: '', department: '', location: '', product: PRODUCTS[0], weeklyCapacityHours: 40, status: 'Active', appRole: DEFAULT_ROLE };
 
+// Fixed option lists for the resource form.
+const LOCATIONS = ['South', 'North', 'UAE'];
+const RESOURCE_ROLES = ['Customization Consultant', 'Development Consultant', 'Lead Consultant', 'Manager'];
+const DEPARTMENTS = ['Development', 'Functional', 'Infra', 'Payroll', 'CRM', 'Support'];
+
 // Fields that must be filled before a resource can be saved (everything except
 // weekly capacity, which is optional and defaults to 40h).
 const REQUIRED = [
@@ -57,7 +62,14 @@ export function Resources() {
   }, [data.Resource, debounced]);
 
   function openCreate() { setForm(EMPTY); setEditing({}); }
-  function openEdit(row) { setForm(row); setEditing(row); setMenuFor(null); }
+  function openEdit(row) {
+    // Coerce any legacy Access role (Project Manager, Consultant, …) to a valid
+    // current one so the dropdown shows a real value and a save persists it.
+    const appRole = ROLES.includes(row.appRole) ? row.appRole : DEFAULT_ROLE;
+    setForm({ ...row, appRole });
+    setEditing(row);
+    setMenuFor(null);
+  }
 
   async function save() {
     const missing = REQUIRED.filter((f) => !String(form[f.key] ?? '').trim());
@@ -125,9 +137,24 @@ export function Resources() {
       >
         <Field label="Full name" required><Input value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} /></Field>
         <Field label="Email" required><Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
-        <Field label="Role" required><Input value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} /></Field>
-        <Field label="Department" required><Input value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} /></Field>
-        <Field label="Location" required><Input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} /></Field>
+        <Field label="Role" required>
+          <Select value={form.role || ''} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+            <option value="">Select…</option>
+            {RESOURCE_ROLES.map((r) => <option key={r}>{r}</option>)}
+          </Select>
+        </Field>
+        <Field label="Department" required>
+          <Select value={form.department || ''} onChange={(e) => setForm({ ...form, department: e.target.value })}>
+            <option value="">Select…</option>
+            {DEPARTMENTS.map((d) => <option key={d}>{d}</option>)}
+          </Select>
+        </Field>
+        <Field label="Location" required>
+          <Select value={form.location || ''} onChange={(e) => setForm({ ...form, location: e.target.value })}>
+            <option value="">Select…</option>
+            {LOCATIONS.map((l) => <option key={l}>{l}</option>)}
+          </Select>
+        </Field>
         <Field label="Product">
           <Select value={form.product || ''} onChange={(e) => setForm({ ...form, product: e.target.value })}>
             {PRODUCTS.map((p) => <option key={p}>{p}</option>)}

@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { ChevronLeft, Plus, Trash2, Pencil } from 'lucide-react';
 import { useData } from '../context/DataContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
-import { PROJECT_ROLES, normalizeRole } from '../lib/permissions.js';
+import { PROJECT_ROLES, projectRoleFor } from '../lib/permissions.js';
 import { PRODUCTS } from '../lib/schema.js';
 import { Card, CardContent, Button, Input, Select, Textarea, Field } from '../components/ui/primitives.jsx';
 import { Dialog, Table } from '../components/ui/Dialog.jsx';
@@ -38,10 +38,12 @@ const FORMS = {
   },
   ProjectTask: {
     label: 'task',
-    empty: { Title: '', description: '', workItemType: 'Task', category: 'Dev Task', status: 'New', priority: 'Medium', assigneeId: '', startDate: '', dueDate: '', estimatedHours: '', loggedHours: '', labels: '', boardOrder: 0 },
+    empty: { Title: '', parentId: '', description: '', workItemType: 'Task', category: 'Dev Task', status: 'New', priority: 'Medium', assigneeId: '', startDate: '', dueDate: '', estimatedHours: '', loggedHours: '', labels: '', boardOrder: 0 },
     numbers: ['estimatedHours', 'loggedHours', 'boardOrder'],
     fields: [
       { name: 'Title', label: 'Title', type: 'text' },
+      // Shown only for sub-tasks (parentId set); parents keep it empty. Keeps two levels.
+      { name: 'parentId', label: 'Parent', type: 'taskParent', showIf: (f) => !!f.parentId },
       { name: 'workItemType', label: 'Type', type: 'select', options: TASK_TYPE_OPTIONS, half: true },
       { name: 'category', label: 'Category', type: 'select', options: TASK_CATEGORY_OPTIONS, half: true },
       { name: 'status', label: 'Status', type: 'select', options: TASK_STATUS_OPTIONS, half: true },
@@ -116,8 +118,14 @@ export function ProjectDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { data, create, update, remove } = useData();
-  const { canWrite } = useAuth();
+  const { canWrite, role, me, assignments } = useAuth();
+  // Management (create/edit/delete of project data) is granted per-project: to
+  // Admins, or to whoever is a LEAD on THIS project (via their assignment role).
+  // A non-lead member (e.g. Consultant) may only update their own tasks.
+  const myProjectRole = projectRoleFor(assignments, me?.resourceId, id);
+  const canManageProject = role === 'Admin' || myProjectRole === 'lead';
   const [tab, setTab] = useState('Overview');
+  const [taskParentId, setTaskParentId] = useState(''); // Tasks tab: selected parent filter
   const [skillOpen, setSkillOpen] = useState(false);
   const [skillForm, setSkillForm] = useState(null);
   const [skillError, setSkillError] = useState('');
@@ -141,8 +149,11 @@ export function ProjectDetail() {
 
   const byProject = (entity) => data[entity].filter((r) => r.projectId === id);
   const resName = (rid) => data.Resource.find((r) => r.resourceId === rid)?.fullName || rid;
-  // Each lead picker lists only resources whose access role matches that slot.
-  const byAppRole = (roleName) => data.Resource.filter((r) => normalizeRole(r.appRole) === roleName);
+  // Assignment resource picker prefers resources sharing the project's product,
+  // but falls back to ALL resources when the project has no product or none
+  // match — so the dropdown is never empty and you can always assign someone.
+  const productMatched = project.product ? data.Resource.filter((r) => r.product === project.product) : [];
+  const assignableByProduct = productMatched.length ? productMatched : data.Resource;
   // Resources staffed on this project — the pool the task assignee picker draws from.
   const assignedResources = (() => {
     const ids = new Set(byProject('ProjectAssignment').map((a) => a.resourceId));
@@ -151,9 +162,9 @@ export function ProjectDetail() {
   const skillName = (sid) => { const s = data.Skill.find((x) => x.skillId === sid); return s?.name || s?.skillName || sid; };
 
   // ── Generic CRUD for the tab tables ──────────────────────────────────────
-  function openCreate(entity) {
-    const empty = { ...FORMS[entity].empty };
-    if (entity === 'ProjectAssignment' && !empty.resourceId) empty.resourceId = data.Resource[0]?.resourceId || '';
+  function openCreate(entity, overrides = {}) {
+    const empty = { ...FORMS[entity].empty, ...overrides };
+    if (entity === 'ProjectAssignment' && !empty.resourceId) empty.resourceId = assignableByProduct[0]?.resourceId || '';
     setEditError('');
     setEditEntity(entity);
     setEditForm(empty);
@@ -228,16 +239,23 @@ export function ProjectDetail() {
   }
 
   // Trailing actions column (edit + delete) appended to each tab's table.
-  // Returns null for roles that can't write the entity — callers filter it out.
-  const actionsCol = (entity) => (canWrite(entity) ? {
-    key: '_actions', label: '', sortable: false, width: 80,
-    render: (r) => (
-      <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-        <button onClick={() => openEdit(entity, r)} aria-label="Edit" title="Edit" style={iconBtnStyle}><Pencil size={15} /></button>
-        <button onClick={() => delRow(entity, r._spId)} aria-label="Delete" title="Delete" style={{ ...iconBtnStyle, color: 'var(--destructive)' }}><Trash2 size={15} /></button>
-      </div>
-    ),
-  } : null);
+  // Managers (Admin / project lead) can edit + delete any record. A non-lead
+  // member can only edit their own tasks (no delete, no other entities).
+  const actionsCol = (entity) => {
+    const canEditRow = canManageProject || (entity === 'ProjectTask' && canWrite('ProjectTask'));
+    if (!canEditRow) return null;
+    return {
+      key: '_actions', label: '', sortable: false, width: 80,
+      render: (r) => (
+        <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+          <button onClick={() => openEdit(entity, r)} aria-label="Edit" title="Edit" style={iconBtnStyle}><Pencil size={15} /></button>
+          {canManageProject && (
+            <button onClick={() => delRow(entity, r._spId)} aria-label="Delete" title="Delete" style={{ ...iconBtnStyle, color: 'var(--destructive)' }}><Trash2 size={15} /></button>
+          )}
+        </div>
+      ),
+    };
+  };
 
   // ── Required skills (Overview tab) ───────────────────────────────────────
   function openAddSkill() {
@@ -272,13 +290,21 @@ export function ProjectDetail() {
     byProject('ProjectTracking').slice().sort((a, b) => new Date(a.weekEnding) - new Date(b.weekEnding)),
     [data.ProjectTracking, id]);
 
+  // Tasks tab: two levels — parent tasks (no parentId) group sub-tasks; the
+  // table shows the sub-tasks of the selected parent (mirrors the Task Board).
+  const projectTasks = byProject('ProjectTask');
+  const taskParents = projectTasks.filter((t) => !t.parentId);
+  const activeTaskParentId = taskParentId && taskParents.some((p) => p.taskId === taskParentId)
+    ? taskParentId : (taskParents[0]?.taskId || '');
+  const projectSubtasks = projectTasks.filter((t) => t.parentId && t.parentId === activeTaskParentId);
+
   return (
     <div>
       <Button variant="ghost" size="sm" onClick={() => navigate('/projects')}><ChevronLeft size={16} /> Back to Projects</Button>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0.75rem 0 0.25rem', flexWrap: 'wrap', gap: 10 }}>
         <h1 style={{ fontSize: '1.6rem', fontWeight: 800 }}>{name}</h1>
         <div style={{ display: 'flex', gap: 8 }}>
-          {canWrite('Project') && <Button variant="outline" size="sm" onClick={openProjectEdit}><Pencil size={14} /> Edit project</Button>}
+          {canManageProject && <Button variant="outline" size="sm" onClick={openProjectEdit}><Pencil size={14} /> Edit project</Button>}
           <Button variant="outline" size="sm" onClick={() => navigate(`/report/${id}`)}>Summary Report</Button>
         </div>
       </div>
@@ -310,7 +336,7 @@ export function ProjectDetail() {
             <div style={{ marginTop: 20 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
                 <div style={{ fontSize: '0.75rem', color: 'var(--muted-foreground)', fontWeight: 600 }}>Required skills</div>
-                {canWrite('ProjectSkill') && <Button variant="outline" size="sm" onClick={openAddSkill} style={{ marginLeft: 'auto' }}><Plus size={14} /> Add skill</Button>}
+                {canManageProject && <Button variant="outline" size="sm" onClick={openAddSkill} style={{ marginLeft: 'auto' }}><Plus size={14} /> Add skill</Button>}
               </div>
               {byProject('ProjectSkill').length === 0 ? (
                 <div style={{ color: 'var(--muted-foreground)', fontSize: '0.875rem' }}>No required skills logged.</div>
@@ -319,7 +345,7 @@ export function ProjectDetail() {
                   {byProject('ProjectSkill').map((r) => (
                     <span key={r._spId} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: '0.8rem', padding: '0.25rem 0.4rem 0.25rem 0.6rem', borderRadius: 999, background: 'var(--muted)', color: 'var(--foreground)', fontWeight: 600 }}>
                       {skillName(r.skillId)}
-                      {canWrite('ProjectSkill') && (
+                      {canManageProject && (
                         <button onClick={() => remove('ProjectSkill', r._spId)} aria-label="Remove skill" title="Remove skill"
                           style={{ display: 'inline-flex', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--muted-foreground)', padding: 0 }}>
                           <Trash2 size={13} />
@@ -334,7 +360,7 @@ export function ProjectDetail() {
         )}
         {tab === 'Assignments' && (
           <div>
-            {canWrite('ProjectAssignment') && <TabToolbar onAdd={() => openCreate('ProjectAssignment')} label="Add resource" />}
+            {canManageProject && <TabToolbar onAdd={() => openCreate('ProjectAssignment')} label="Add resource" />}
             <Table empty="No assignments."
               columns={[{ key: 'resourceId', label: 'Resource', render: (r) => resName(r.resourceId) }, { key: 'role', label: 'Role' }, { key: 'allocationPercent', label: 'Allocation', render: (r) => `${r.allocationPercent || 0}%` }, { key: 'startDate', label: 'Start', render: (r) => fmtDate(r.startDate) }, { key: 'endDate', label: 'End', render: (r) => fmtDate(r.endDate) }, actionsCol('ProjectAssignment')].filter(Boolean)}
               rows={byProject('ProjectAssignment')} />
@@ -342,8 +368,24 @@ export function ProjectDetail() {
         )}
         {tab === 'Tasks' && (
           <div>
-            {canWrite('ProjectTask') && <TabToolbar onAdd={() => openCreate('ProjectTask')} label="Add task" />}
-            <Table empty="No tasks."
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--muted-foreground)', fontWeight: 600 }}>Parent</span>
+              <Select value={activeTaskParentId} onChange={(e) => setTaskParentId(e.target.value)} disabled={!taskParents.length} style={{ width: 220 }}>
+                {taskParents.length
+                  ? taskParents.map((p) => <option key={p._spId} value={p.taskId}>{p.Title || '(untitled parent)'}</option>)
+                  : <option value="">No parents yet</option>}
+              </Select>
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                {canManageProject && <Button variant="outline" size="sm" onClick={() => openCreate('ProjectTask', { parentId: '' })}><Plus size={16} /> New parent</Button>}
+                {canManageProject && <Button size="sm" onClick={() => openCreate('ProjectTask', { parentId: activeTaskParentId })} disabled={!taskParents.length}><Plus size={16} /> New sub-task</Button>}
+              </div>
+            </div>
+            {!taskParents.length && (
+              <div style={{ marginBottom: 12, padding: '0.7rem 0.9rem', borderRadius: 'var(--radius)', background: 'var(--muted)', color: 'var(--muted-foreground)', fontSize: '0.85rem' }}>
+                No parent tasks yet. Create a <strong>parent</strong> first, then add sub-tasks under it.
+              </div>
+            )}
+            <Table empty="No sub-tasks for this parent."
               columns={[
                 { key: 'Title', label: 'Title' },
                 { key: 'workItemType', label: 'Type' },
@@ -354,12 +396,12 @@ export function ProjectDetail() {
                 { key: 'dueDate', label: 'Due', render: (r) => fmtDate(r.dueDate) },
                 actionsCol('ProjectTask'),
               ].filter(Boolean)}
-              rows={byProject('ProjectTask')} />
+              rows={projectSubtasks} />
           </div>
         )}
         {tab === 'Tracking' && (
           <div>
-            {canWrite('ProjectTracking') && <TabToolbar onAdd={() => openCreate('ProjectTracking')} label="Add tracking entry" />}
+            {canManageProject && <TabToolbar onAdd={() => openCreate('ProjectTracking')} label="Add tracking entry" />}
             {tracking.length > 0 && <div style={{ marginBottom: 16 }}><LineChart data={tracking.map((t) => ({ x: fmtDate(t.weekEnding).slice(5), y: Number(t.percentComplete) || 0 }))} /></div>}
             <Table empty="No tracking entries."
               columns={[{ key: 'weekEnding', label: 'Week Ending', render: (r) => fmtDate(r.weekEnding) }, { key: 'ragStatus', label: 'RAG', render: (r) => <RagBadge status={r.ragStatus} /> }, { key: 'percentComplete', label: '% Complete', render: (r) => `${r.percentComplete || 0}%` }, { key: 'narrative', label: 'Narrative' }, actionsCol('ProjectTracking')].filter(Boolean)}
@@ -368,7 +410,7 @@ export function ProjectDetail() {
         )}
         {tab === 'Risks' && (
           <div>
-            {canWrite('ProjectRisk') && <TabToolbar onAdd={() => openCreate('ProjectRisk')} label="Add risk" />}
+            {canManageProject && <TabToolbar onAdd={() => openCreate('ProjectRisk')} label="Add risk" />}
             <Table empty="No risks."
               columns={[{ key: 'title', label: 'Title', render: (r) => r.title || r.riskTitle }, { key: 'severity', label: 'Severity', render: (r) => <SeverityPill level={r.severity} /> }, { key: 'probability', label: 'Probability' }, { key: 'owner', label: 'Owner' }, { key: 'status', label: 'Status' }, actionsCol('ProjectRisk')].filter(Boolean)}
               rows={byProject('ProjectRisk')} />
@@ -376,7 +418,7 @@ export function ProjectDetail() {
         )}
         {tab === 'Meetings' && (
           <div>
-            {canWrite('SteeringMeeting') && <TabToolbar onAdd={() => openCreate('SteeringMeeting')} label="Add meeting" />}
+            {canManageProject && <TabToolbar onAdd={() => openCreate('SteeringMeeting')} label="Add meeting" />}
             <Table empty="No meetings."
               columns={[{ key: 'meetingDate', label: 'Date', render: (r) => fmtDate(r.meetingDate) }, { key: 'attendees', label: 'Attendees' }, { key: 'decisions', label: 'Decisions' }, actionsCol('SteeringMeeting')].filter(Boolean)}
               rows={byProject('SteeringMeeting')} />
@@ -384,7 +426,7 @@ export function ProjectDetail() {
         )}
         {tab === 'Payments' && (
           <div>
-            {canWrite('ProjectPayment') && <TabToolbar onAdd={() => openCreate('ProjectPayment')} label="Add payment" />}
+            {canManageProject && <TabToolbar onAdd={() => openCreate('ProjectPayment')} label="Add payment" />}
             <Table empty="No payments."
               columns={[{ key: 'milestone', label: 'Milestone' }, { key: 'amount', label: 'Amount', render: (r) => money(r.amount, r.currency) }, { key: 'dueDate', label: 'Due', render: (r) => fmtDate(r.dueDate) }, { key: 'invoiceDate', label: 'Invoiced', render: (r) => fmtDate(r.invoiceDate) }, { key: 'status', label: 'Status', render: (r) => <PaymentStatusPill status={effectivePaymentStatus(r)} /> }, actionsCol('ProjectPayment')].filter(Boolean)}
               rows={byProject('ProjectPayment')} />
@@ -431,20 +473,20 @@ export function ProjectDetail() {
           <Field label="Project manager (owner)" required>
             <Select value={projForm.managerId} onChange={(e) => setProjForm({ ...projForm, managerId: e.target.value })}>
               <option value="">Unassigned</option>
-              {byAppRole('Project Manager').map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
+              {data.Resource.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
             </Select>
           </Field>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <Field label="Dev Lead">
               <Select value={projForm.devLeadId} onChange={(e) => setProjForm({ ...projForm, devLeadId: e.target.value })}>
                 <option value="">Unassigned</option>
-                {byAppRole('Dev Lead').map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
+                {data.Resource.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
               </Select>
             </Field>
             <Field label="Functional Lead">
               <Select value={projForm.functionalLeadId} onChange={(e) => setProjForm({ ...projForm, functionalLeadId: e.target.value })}>
                 <option value="">Unassigned</option>
-                {byAppRole('Functional Lead').map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
+                {data.Resource.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
               </Select>
             </Field>
           </div>
@@ -453,7 +495,7 @@ export function ProjectDetail() {
 
       {/* Generic add/edit dialog for the tab entities */}
       <Dialog open={!!editEntity} onClose={closeEdit}
-        title={`${editForm?._spId ? 'Edit' : 'Add'} ${editEntity ? FORMS[editEntity].label : ''}`}
+        title={`${editForm?._spId ? 'Edit' : 'Add'} ${editEntity === 'ProjectTask' ? (editForm?.parentId ? 'sub-task' : 'parent') : (editEntity ? FORMS[editEntity].label : '')}`}
         footer={<>
           <Button variant="outline" onClick={closeEdit}>Cancel</Button>
           <Button onClick={saveEdit} disabled={editSaving}>{editSaving ? 'Saving…' : (editForm?._spId ? 'Save' : 'Add')}</Button>
@@ -469,7 +511,8 @@ export function ProjectDetail() {
               <div key={fl.name} style={{ gridColumn: fl.half ? 'span 1' : 'span 2' }}>
                 <Field label={fl.suffix ? `${fl.label} (${editForm[fl.name]}${fl.suffix})` : fl.label}>
                   <EditField field={fl} value={editForm[fl.name]}
-                    resources={editEntity === 'ProjectTask' ? assignedResources : data.Resource}
+                    resources={editEntity === 'ProjectTask' ? assignedResources : (editEntity === 'ProjectAssignment' ? assignableByProduct : data.Resource)}
+                    parents={taskParents}
                     onChange={(v) => setEditForm((f) => ({ ...f, [fl.name]: v }))} />
                 </Field>
               </div>
@@ -514,11 +557,13 @@ function TabToolbar({ onAdd, label }) {
   );
 }
 
-function EditField({ field, value, onChange, resources }) {
+function EditField({ field, value, onChange, resources, parents }) {
   const v = value ?? '';
   switch (field.type) {
     case 'resource':
       return <Select value={v} onChange={(e) => onChange(e.target.value)}>{resources.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}</Select>;
+    case 'taskParent':
+      return <Select value={v} onChange={(e) => onChange(e.target.value)}>{(parents || []).map((p) => <option key={p._spId} value={p.taskId}>{p.Title || '(untitled parent)'}</option>)}</Select>;
     case 'select':
       return <Select value={v} onChange={(e) => onChange(e.target.value)}>{field.options.map((o) => <option key={o} value={o}>{o}</option>)}</Select>;
     case 'textarea':

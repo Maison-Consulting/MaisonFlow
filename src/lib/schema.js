@@ -49,7 +49,7 @@ export const SCHEMA = [
       { name: 'product', kind: T },
       { name: 'weeklyCapacityHours', kind: NUM },
       { name: 'status', kind: T },
-      { name: 'appRole', kind: T }, // access role: Admin | Project Manager | Consultant | Finance | Viewer
+      { name: 'appRole', kind: T }, // access role: Admin | Viewer | User (User's access comes from assignments)
     ],
   },
   {

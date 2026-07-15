@@ -46,7 +46,7 @@ const SECTIONS = [
 ];
 
 export function Sidebar({ open, onNavigate }) {
-  const { canView, email, role, isResolved } = useAuth();
+  const { canView, email, accessRole, isResolved } = useAuth();
   // Hide nav items the role can't view, then drop any section left empty.
   const sections = SECTIONS
     .map((s) => ({ ...s, items: s.items.filter((it) => canView(moduleForPath(it.to))) }))
@@ -116,10 +116,10 @@ export function Sidebar({ open, onNavigate }) {
             display: 'inline-block', padding: '0.1rem 0.5rem', borderRadius: 999, fontWeight: 700,
             fontSize: '0.7rem', color: 'var(--primary)', background: 'oklch(0.62 0.17 35 / 0.1)',
           }}>
-            {role}
+            {accessRole}
           </span>
           {!isResolved && (
-            <span title="No Resource record matched this email — defaulting to Viewer. Add a Resource row with this exact email and set its appRole." style={{ color: 'var(--destructive, #c0392b)', fontWeight: 600 }}>
+            <span title="No Resource record matched this email — defaulting to User. Add a Resource row with this exact email and set its Access role." style={{ color: 'var(--destructive, #c0392b)', fontWeight: 600 }}>
               unmatched
             </span>
           )}

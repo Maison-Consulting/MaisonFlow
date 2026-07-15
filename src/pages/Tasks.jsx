@@ -73,7 +73,7 @@ function parseDiscussion(raw) {
 
 export function Tasks() {
   const { data, loading, create, update, remove } = useData();
-  const { canWrite, me, email } = useAuth();
+  const { canWrite, me, email, canManageProject } = useAuth();
   const canEdit = canWrite('ProjectTask');
   const [projectId, setProjectId] = useState('');
   const [selectedParentId, setSelectedParentId] = useState('');
@@ -89,6 +89,9 @@ export function Tasks() {
   const selected = projectId || projects[0]?.projectId || '';
   const selectedProject = projects.find((p) => p.projectId === selected);
   const projName = selectedProject?.projectName || selectedProject?.name || '';
+  // Task create/delete + parent management require lead rights on the SELECTED
+  // project. Editing/completing an own task uses canEdit (a member can do that).
+  const canManageTasks = canEdit && canManageProject(selected);
 
   // Best-effort assignment email: notify the assignee their task was assigned.
   function emailAssignee(assigneeId, task) {
@@ -339,9 +342,9 @@ export function Tasks() {
             ? parents.map((p) => <option key={p._spId} value={p.taskId}>{p.Title || '(untitled parent)'}</option>)
             : <option value="">No parents yet</option>}
         </Select>
-        {canEdit && activeParent && <Button variant="ghost" size="sm" onClick={() => openEdit(activeParent)}>Edit parent</Button>}
-        {canEdit && <Button variant="outline" onClick={openNewParent} disabled={!selected}><Plus size={16} /> New parent</Button>}
-        {canEdit && <Button onClick={openNewSubtask} disabled={!selected || !parents.length}><Plus size={16} /> New sub-task</Button>}
+        {canManageTasks && activeParent && <Button variant="ghost" size="sm" onClick={() => openEdit(activeParent)}>Edit parent</Button>}
+        {canManageTasks && <Button variant="outline" onClick={openNewParent} disabled={!selected}><Plus size={16} /> New parent</Button>}
+        {canManageTasks && <Button onClick={openNewSubtask} disabled={!selected || !parents.length}><Plus size={16} /> New sub-task</Button>}
       </PageHeader>
 
       {!loading.ProjectTask && selected && !parents.length && (
@@ -403,7 +406,7 @@ export function Tasks() {
         width={560}
         footer={
           <>
-            {canEdit && form?._spId && (
+            {canManageTasks && form?._spId && (
               <Button variant="destructive" onClick={del} style={{ marginRight: 'auto' }}>
                 <Trash2 size={15} /> Delete
               </Button>

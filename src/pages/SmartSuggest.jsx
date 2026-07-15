@@ -64,7 +64,8 @@ export function SmartSuggest() {
     return data.Resource
       .filter((r) => region === 'All' || r.location === region)
       .filter((r) => type === 'All' || r.role === type)
-      // Restrict to the project's product when both sides declare one.
+      // Restrict to the project's product, but keep resources that don't declare
+      // a product — only exclude those explicitly tagged with a DIFFERENT one.
       .filter((r) => !product || !r.product || r.product === product)
       // Exclude anyone already on THIS project within the window.
       .filter((r) => !data.ProjectAssignment.some(

@@ -8,8 +8,11 @@ import { PageHeader } from '../components/Layout.jsx';
 
 export function ProjectSkills() {
   const { data, loading, create, remove } = useData();
-  const { canWrite } = useAuth();
+  const { canWrite, canManageProject } = useAuth();
   const canEdit = canWrite('ProjectSkill');
+  // Skills can only be managed on projects the user leads (or as Admin).
+  const canManage = (pid) => canEdit && canManageProject(pid);
+  const manageableProjects = data.Project.filter((p) => canManageProject(p.projectId));
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(null);
   const [filterProject, setFilterProject] = useState('');
@@ -31,7 +34,8 @@ export function ProjectSkills() {
 
   function openNew() {
     setError('');
-    setForm({ projectId: filterProject || data.Project[0]?.projectId || '', skillId: data.Skill[0]?.skillId || '', minProficiency: 3, hoursNeeded: '' });
+    const defaultProject = (filterProject && canManageProject(filterProject)) ? filterProject : (manageableProjects[0]?.projectId || '');
+    setForm({ projectId: defaultProject, skillId: data.Skill[0]?.skillId || '', minProficiency: 3, hoursNeeded: '' });
     setOpen(true);
   }
   function openForProject(projectId) {
@@ -81,7 +85,7 @@ export function ProjectSkills() {
           <option value="">All Projects</option>
           {data.Project.map((p) => <option key={p._spId} value={p.projectId}>{projName(p.projectId)}</option>)}
         </Select>
-        {canEdit && <Button onClick={openNew} style={{ marginLeft: 'auto' }}><Plus size={16} /> Add Skill to Project</Button>}
+        {canEdit && manageableProjects.length > 0 && <Button onClick={openNew} style={{ marginLeft: 'auto' }}><Plus size={16} /> Add Skill to Project</Button>}
       </Card>
 
       {loading.ProjectSkill || loading.Project ? (
@@ -100,7 +104,7 @@ export function ProjectSkills() {
                   <span style={{ fontSize: '0.78rem', fontWeight: 600, border: '1px solid var(--border)', borderRadius: 999, padding: '0.15rem 0.6rem', whiteSpace: 'nowrap' }}>
                     {links.length} {links.length === 1 ? 'skill' : 'skills'}
                   </span>
-                  {canEdit && (
+                  {canManage(proj.projectId) && (
                     <button onClick={() => openForProject(proj.projectId)} aria-label="Add skill to this project" title="Add skill to this project"
                       style={{ display: 'inline-flex', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--rag-green)', padding: 2 }}>
                       <Sparkles size={18} />
@@ -117,7 +121,7 @@ export function ProjectSkills() {
                     <span key={l._spId} title={`Min proficiency ${l.minProficiency}/5 · ${l.hoursNeeded}h`}
                       style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '0.4rem 0.7rem', border: '1px solid var(--border)', borderRadius: 8, fontSize: '0.85rem', fontWeight: 600 }}>
                       {skillName(l.skillId)}
-                      {canEdit && (
+                      {canManage(proj.projectId) && (
                         <button onClick={() => remove('ProjectSkill', l._spId)} aria-label="Remove skill"
                           style={{ display: 'inline-flex', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--muted-foreground)', padding: 0 }}>
                           <Trash2 size={14} />
@@ -145,7 +149,7 @@ export function ProjectSkills() {
           )}
           <Field label="Project" required>
             <Select value={form.projectId} disabled={form.lockProject} onChange={(e) => setForm({ ...form, projectId: e.target.value })}>
-              {data.Project.map((p) => <option key={p._spId} value={p.projectId}>{projName(p.projectId)}</option>)}
+              {manageableProjects.map((p) => <option key={p._spId} value={p.projectId}>{projName(p.projectId)}</option>)}
             </Select>
           </Field>
           <Field label="Skill" required>

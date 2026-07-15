@@ -8,11 +8,23 @@ import { SCHEMA } from './schema.js';
 const WRITABLE = Object.fromEntries(
   SCHEMA.map((d) => [d.name, new Set([...d.columns.map((c) => c.name), 'Title'])])
 );
+// Column → kind lookup, so we can coerce values SharePoint would reject.
+const KINDS = Object.fromEntries(
+  SCHEMA.map((d) => [d.name, Object.fromEntries(d.columns.map((c) => [c.name, c.kind]))])
+);
 function pickWritable(listName, obj) {
   const allow = WRITABLE[listName];
   if (!allow) return obj;
+  const kinds = KINDS[listName] || {};
   const out = {};
-  for (const k of Object.keys(obj)) if (allow.has(k)) out[k] = obj[k];
+  for (const k of Object.keys(obj)) {
+    if (!allow.has(k)) continue;
+    let v = obj[k];
+    // SharePoint Date/Number columns reject empty strings with a 400
+    // badArgument — send null to leave them blank instead.
+    if ((kinds[k] === 'date' || kinds[k] === 'number') && (v === '' || v === undefined)) v = null;
+    out[k] = v;
+  }
   return out;
 }
 

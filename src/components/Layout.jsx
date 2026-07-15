@@ -94,7 +94,7 @@ export function Layout() {
 // Signed-in user details + logout, shown in the header.
 function UserMenu() {
   const { instance } = useMsal();
-  const { role } = useAuth();
+  const { accessRole } = useAuth();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const account = instance.getActiveAccount() || instance.getAllAccounts()[0];
@@ -152,7 +152,7 @@ function UserMenu() {
               </div>
             )}
             <div style={{ marginTop: 6, display: 'inline-block', fontSize: '0.72rem', fontWeight: 700, padding: '0.1rem 0.5rem', borderRadius: 999, background: 'var(--muted)', color: 'var(--muted-foreground)' }}>
-              {role}
+              {accessRole}
             </div>
           </div>
           <button

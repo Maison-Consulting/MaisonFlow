@@ -9,6 +9,13 @@ export function useData() { return useContext(DataCtx); }
 
 const ENTITIES = Object.keys(allServices);
 
+// Entities that belong to a project — writes to these are authorized per project
+// (lead of that project or Admin), not just by global role.
+const PROJECT_CHILD = new Set([
+  'ProjectSkill', 'ProjectAssignment', 'ProjectTask', 'ProjectTracking',
+  'ProjectRisk', 'SteeringMeeting', 'ProjectPayment',
+]);
+
 export function DataProvider({ children }) {
   const toast = useToast();
   const auth = useAuth();
@@ -42,17 +49,27 @@ export function DataProvider({ children }) {
 
   useEffect(() => { reload().finally(() => setInitialLoading(false)); }, [reload]);
 
-  // Central write-gate: role must be allowed to modify this entity.
-  const guardWrite = useCallback((entity) => {
-    if (!auth.canWrite(entity)) {
-      toast(`Your role (${auth.role}) can't modify ${entity}.`, 'error');
-      throw new Error('forbidden');
+  // Central write authorization. The global role must allow the entity; and for
+  // project-child records the user must be Admin or a LEAD on that record's
+  // project — except a non-lead member may UPDATE their own task. Returns an
+  // error message string when denied, or null when allowed.
+  const authorize = useCallback((entity, action, record) => {
+    if (!auth.canWrite(entity)) return `Your role (${auth.role}) can't modify ${entity}.`;
+    if (PROJECT_CHILD.has(entity) && auth.role !== 'Admin') {
+      if (!auth.canManageProject(record?.projectId)) {
+        const mine = auth.me?.resourceId;
+        const ownTaskUpdate = entity === 'ProjectTask' && action === 'update'
+          && record && (record.assigneeId === mine || record.reporterId === mine);
+        if (!ownTaskUpdate) return 'You can only manage the projects you lead.';
+      }
     }
-  }, [auth, toast]);
+    return null;
+  }, [auth]);
+  const guardOrThrow = (err) => { if (err) { toast(err, 'error'); throw new Error('forbidden'); } };
 
   // Optimistic create.
   const create = useCallback(async (entity, payload) => {
-    guardWrite(entity);
+    guardOrThrow(authorize(entity, 'create', payload));
     const tmpId = `tmp-${Math.random().toString(36).slice(2)}`;
     const optimistic = { ...payload, _spId: tmpId };
     setData((d) => ({ ...d, [entity]: [...d[entity], optimistic] }));
@@ -66,11 +83,11 @@ export function DataProvider({ children }) {
       toast(`Couldn't create ${entity}: ${err.message}`, 'error');
       throw err;
     }
-  }, [toast, guardWrite]);
+  }, [toast, authorize]);
 
   // Optimistic update.
   const update = useCallback(async (entity, spId, patch) => {
-    guardWrite(entity);
+    guardOrThrow(authorize(entity, 'update', rawData[entity]?.find((r) => r._spId === spId)));
     let prev;
     setData((d) => {
       prev = d[entity].find((r) => r._spId === spId);
@@ -84,11 +101,11 @@ export function DataProvider({ children }) {
       toast(`Couldn't update ${entity}: ${err.message}`, 'error');
       throw err;
     }
-  }, [toast, guardWrite]);
+  }, [toast, authorize, rawData]);
 
   // Optimistic delete.
   const remove = useCallback(async (entity, spId) => {
-    guardWrite(entity);
+    guardOrThrow(authorize(entity, 'delete', rawData[entity]?.find((r) => r._spId === spId)));
     let removed, idx;
     setData((d) => {
       idx = d[entity].findIndex((r) => r._spId === spId);
@@ -107,7 +124,7 @@ export function DataProvider({ children }) {
       toast(`Couldn't delete ${entity}: ${err.message}`, 'error');
       throw err;
     }
-  }, [toast, guardWrite]);
+  }, [toast, authorize, rawData]);
 
   const value = { data, loading, initialLoading, fatalError, reload, create, update, remove };
   return <DataCtx.Provider value={value}>{children}</DataCtx.Provider>;

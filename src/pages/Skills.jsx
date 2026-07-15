@@ -5,8 +5,8 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { Card, Button, Input, Select, Textarea, Field, Skeleton } from '../components/ui/primitives.jsx';
 import { Dialog } from '../components/ui/Dialog.jsx';
 
-const CATEGORIES = ['Developer', 'Functional', 'PM', 'Soft Skills', 'Infra'];
-const EMPTY = { name: '', category: 'Engineering', description: '' };
+const CATEGORIES = ['Development', 'Functional', 'PM', 'Soft Skills', 'Infra'];
+const EMPTY = { name: '', category: 'Development', description: '' };
 
 // Tolerate legacy rows that stored the name under `skillName` instead of `name`.
 const nameOf = (s) => s.name || s.skillName || '';
@@ -19,6 +19,7 @@ const CAT_COLORS = {
   Data: { bg: 'oklch(0.94 0.09 95)', fg: 'oklch(0.52 0.12 90)' },
   Cloud: { bg: 'oklch(0.92 0.06 250)', fg: 'oklch(0.50 0.14 260)' },
   Developer: { bg: 'oklch(0.92 0.06 265)', fg: 'oklch(0.48 0.16 265)' },
+  Development: { bg: 'oklch(0.92 0.06 265)', fg: 'oklch(0.48 0.16 265)' },
   Functional: { bg: 'oklch(0.92 0.07 320)', fg: 'oklch(0.50 0.16 325)' },
 };
 const FALLBACK = [
@@ -49,7 +50,7 @@ export function Skills() {
   }, [data.Skill]);
 
   function openCreate() { setForm(EMPTY); setEditing({}); setOpen(true); }
-  function openEdit(row) { setForm({ name: nameOf(row), category: row.category || 'Engineering', description: row.description || '' }); setEditing(row); setOpen(true); }
+  function openEdit(row) { setForm({ name: nameOf(row), category: row.category || 'Development', description: row.description || '' }); setEditing(row); setOpen(true); }
 
   async function save() {
     if (!form.name.trim()) return;
