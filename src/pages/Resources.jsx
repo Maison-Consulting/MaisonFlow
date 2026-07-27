@@ -6,15 +6,15 @@ import { Dialog, Table } from '../components/ui/Dialog.jsx';
 import { PageHeader } from '../components/Layout.jsx';
 import { ResourceStatusPill } from '../components/pills.jsx';
 import { useDebounced } from '../lib/useDebounced.js';
-import { PRODUCTS } from '../lib/schema.js';
+import { ProductSelect } from '../components/ProductSelect.jsx';
 import { ROLES, DEFAULT_ROLE } from '../lib/permissions.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
-const EMPTY = { fullName: '', email: '', role: '', department: '', location: '', product: PRODUCTS[0], weeklyCapacityHours: 40, status: 'Active', appRole: DEFAULT_ROLE };
+const EMPTY = { fullName: '', email: '', role: '', department: '', location: '', product: '', weeklyCapacityHours: 40, status: 'Active', appRole: DEFAULT_ROLE };
 
 // Fixed option lists for the resource form.
 const LOCATIONS = ['South', 'North', 'UAE'];
-const RESOURCE_ROLES = ['Customization Consultant', 'Development Consultant', 'Lead Consultant', 'Manager'];
+const RESOURCE_ROLES = ['Customization Consultant', 'Development Consultant', 'Functional Consultant', 'Lead Consultant', 'Associate Manager', 'Manager'];
 const DEPARTMENTS = ['Development', 'Functional', 'Infra', 'Payroll', 'CRM', 'Support'];
 
 // Fields that must be filled before a resource can be saved (everything except
@@ -156,9 +156,7 @@ export function Resources() {
           </Select>
         </Field>
         <Field label="Product">
-          <Select value={form.product || ''} onChange={(e) => setForm({ ...form, product: e.target.value })}>
-            {PRODUCTS.map((p) => <option key={p}>{p}</option>)}
-          </Select>
+          <ProductSelect value={form.product} onChange={(v) => setForm({ ...form, product: v })} />
         </Field>
         <Field label="Weekly capacity (hours)"><Input type="number" value={form.weeklyCapacityHours} onChange={(e) => setForm({ ...form, weeklyCapacityHours: e.target.value })} /></Field>
         <Field label="Status" required>

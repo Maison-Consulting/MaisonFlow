@@ -23,7 +23,26 @@ const NUM = 'number';
 const DATE = 'date';
 
 // Product lines used to scope Smart Suggest and tag resources/projects.
-export const PRODUCTS = ['F&O', 'BC', 'F&O Retail', 'Power Platform', 'Other'];
+// Projects and resources can be tagged with MULTIPLE products, stored as a
+// comma-separated string in the single `product` text column.
+export const PRODUCTS = ['F&O', 'BC', 'Retail', 'Power Platform', 'Other'];
+
+// Meeting types for the project Meetings section.
+export const MEETING_TYPES = ['Steering Meeting', 'Project Status Update Meeting', 'Master Data Readiness Meeting', 'Internal Meetings'];
+
+// Parse a stored product value ("F&O, BC") into a clean array.
+export function parseProducts(v) {
+  return String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+// Do two product values share at least one product? An empty value on either
+// side means "unassigned" → no restriction (treated as a match).
+export function productsOverlap(a, b) {
+  const pa = parseProducts(a);
+  const pb = parseProducts(b);
+  if (!pa.length || !pb.length) return true;
+  return pa.some((p) => pb.includes(p));
+}
 
 // Each list: { name, displayName, columns: [{ name, kind }] }
 // `name` is the internal/list name used in the Graph URL.
@@ -159,6 +178,7 @@ export const SCHEMA = [
     columns: [
       { name: 'meetingId', kind: T },
       { name: 'projectId', kind: T },
+      { name: 'meetingType', kind: T }, // Steering | Project Status Update | Master Data Readiness | Internal
       { name: 'meetingDate', kind: DATE },
       { name: 'attendees', kind: NOTE },
       { name: 'agenda', kind: NOTE },
@@ -177,6 +197,7 @@ export const SCHEMA = [
       { name: 'dueDate', kind: DATE },
       { name: 'invoiceNumber', kind: T },
       { name: 'invoiceDate', kind: DATE }, // date the invoice was issued (shown when status is Invoiced/Paid)
+      { name: 'paymentDate', kind: DATE }, // date payment was received (shown when status is Paid/Partial)
       { name: 'status', kind: T },
     ],
   },

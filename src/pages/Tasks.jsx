@@ -1,13 +1,14 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { Plus, Bug, CheckSquare, Clock, Trash2 } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { Plus, Bug, CheckSquare, Clock, Trash2, Paperclip } from 'lucide-react';
 import { useData } from '../context/DataContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
-import { Card, Button, Input, Select, Textarea, Field, Skeleton, Badge } from '../components/ui/primitives.jsx';
+import { Card, Button, Input, Select, Textarea, Field, Skeleton, Badge, useToast } from '../components/ui/primitives.jsx';
 import { Dialog } from '../components/ui/Dialog.jsx';
 import { PageHeader } from '../components/Layout.jsx';
 import { PriorityPill, fmtDate } from '../components/pills.jsx';
 import { sendTaskAssignedEmail, sendMentionEmail } from '../lib/notify.js';
 import { graphSearchUsers } from '../lib/graphClient.js';
+import { listAttachments, addAttachment, deleteAttachment } from '../lib/spClient.js';
 
 // Board columns, in order. `status` values must match these labels.
 const COLUMNS = ['New', 'Open', 'In Progress', 'On Hold', 'Resolved', 'Closed'];
@@ -75,8 +76,14 @@ export function Tasks() {
   const { data, loading, create, update, remove } = useData();
   const { canWrite, me, email, canManageProject } = useAuth();
   const canEdit = canWrite('ProjectTask');
+  const toast = useToast();
+  const fileInputRef = useRef(null);
+  const [attachments, setAttachments] = useState([]);
+  const [attachBusy, setAttachBusy] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState([]); // files chosen while creating a task (uploaded after save)
   const [projectId, setProjectId] = useState('');
   const [selectedParentId, setSelectedParentId] = useState('');
+  const [mineOnly, setMineOnly] = useState(false);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(null);
   const [comment, setComment] = useState('');
@@ -93,14 +100,16 @@ export function Tasks() {
   // project. Editing/completing an own task uses canEdit (a member can do that).
   const canManageTasks = canEdit && canManageProject(selected);
 
-  // Best-effort assignment email: notify the assignee their task was assigned.
+  // Assignment email — surface the result so it's clear whether it sent.
   function emailAssignee(assigneeId, task) {
     const r = data.Resource.find((x) => x.resourceId === assigneeId);
-    if (!r?.email) return;
+    if (!r?.email) { toast(`No email on ${r?.fullName || 'the assignee'}'s record — notification not sent.`, 'error'); return; }
     sendTaskAssignedEmail({
       to: r.email, toName: r.fullName, taskTitle: task.Title,
       projectName: projName, assignedBy: me?.fullName || email || 'Someone',
-    }).catch(() => {}); // email is best-effort; never block the task action
+    })
+      .then(() => toast(`Assignment email sent to ${r.fullName}`))
+      .catch((e) => toast(`Email not sent: ${e.message}`, 'error'));
   }
 
   // resourceId → display name, for showing assignees on cards.
@@ -133,8 +142,11 @@ export function Tasks() {
     : (parents[0]?.taskId || '');
   const activeParent = parents.find((p) => p.taskId === activeParentId) || null;
   const subtasks = useMemo(
-    () => tasks.filter((t) => t.parentId && t.parentId === activeParentId),
-    [tasks, activeParentId]
+    () => tasks.filter((t) =>
+      t.parentId && t.parentId === activeParentId &&
+      (!mineOnly || t.assigneeId === me?.resourceId)
+    ),
+    [tasks, activeParentId, mineOnly, me]
   );
 
   // Group sub-tasks by status column, each sorted by boardOrder.
@@ -146,17 +158,17 @@ export function Tasks() {
   }, [subtasks]);
 
   function openNewParent() {
-    setComment('');
+    setComment(''); setPendingFiles([]);
     setForm(blankTask(selected, ''));
     setOpen(true);
   }
   function openNewSubtask() {
-    setComment('');
+    setComment(''); setPendingFiles([]);
     setForm(blankTask(selected, activeParentId));
     setOpen(true);
   }
   function openEdit(task) {
-    setComment('');
+    setComment(''); setPendingFiles([]);
     setForm({ ...task });
     setOpen(true);
   }
@@ -185,10 +197,49 @@ export function Tasks() {
       sendMentionEmail({
         to: mail, toName: name, taskTitle: form.Title,
         projectName: projName, mentionedBy: author, comment: text,
-      }).catch(() => {});
+      })
+        .then(() => toast(`Mention emailed to ${name}`))
+        .catch((e) => toast(`Mention email not sent: ${e.message}`, 'error'));
     });
     setComment('');
     setMentionedMap({});
+  }
+
+  // Load the open task's SharePoint attachments.
+  useEffect(() => {
+    if (!open || !form?._spId) { setAttachments([]); return; }
+    let cancelled = false;
+    listAttachments('ProjectTask', form._spId)
+      .then((a) => { if (!cancelled) setAttachments(a); })
+      .catch(() => { if (!cancelled) setAttachments([]); });
+    return () => { cancelled = true; };
+  }, [open, form?._spId]);
+
+  async function uploadAttachment(file) {
+    if (!file || !form?._spId) return;
+    setAttachBusy(true);
+    try {
+      await addAttachment('ProjectTask', form._spId, file);
+      setAttachments(await listAttachments('ProjectTask', form._spId));
+      toast('Attachment added');
+    } catch (e) {
+      toast(`Couldn't attach file: ${e.message}`, 'error');
+    } finally {
+      setAttachBusy(false);
+    }
+  }
+  async function removeAttachment(name) {
+    if (!form?._spId) return;
+    setAttachBusy(true);
+    try {
+      await deleteAttachment('ProjectTask', form._spId, name);
+      setAttachments((prev) => prev.filter((x) => x.name !== name));
+      toast('Attachment removed');
+    } catch (e) {
+      toast(`Couldn't remove attachment: ${e.message}`, 'error');
+    } finally {
+      setAttachBusy(false);
+    }
   }
 
   async function save() {
@@ -212,8 +263,17 @@ export function Tasks() {
       // initial status so time-in-stage is measured from creation.
       payload.boardOrder = nextOrder(form.status);
       payload.statusHistory = JSON.stringify([{ s: form.status, at: new Date().toISOString() }]);
-      await create('ProjectTask', payload);
+      const saved = await create('ProjectTask', payload);
       if (payload.assigneeId) emailAssignee(payload.assigneeId, payload);
+      // Upload any files chosen during creation, now that the item exists.
+      if (saved?._spId && pendingFiles.length) {
+        let failed = 0;
+        for (const f of pendingFiles) {
+          try { await addAttachment('ProjectTask', saved._spId, f); } catch { failed += 1; }
+        }
+        if (failed) toast(`${failed} attachment(s) couldn't be uploaded.`, 'error');
+        setPendingFiles([]);
+      }
     }
     setOpen(false);
   }
@@ -238,6 +298,10 @@ export function Tasks() {
     if ((task.assigneeId || '') === assigneeId) return;
     await update('ProjectTask', task._spId, { assigneeId });
     if (assigneeId) emailAssignee(assigneeId, task);
+    // Heads-up when a hand-off removes the task from a non-manager's board.
+    if (!canManageTasks && assigneeId && assigneeId !== me?.resourceId) {
+      toast('Task handed off — it will drop off your board.');
+    }
   }
 
   // Explicitly reopen a Done task (the only way out, since status is locked).
@@ -342,7 +406,8 @@ export function Tasks() {
             ? parents.map((p) => <option key={p._spId} value={p.taskId}>{p.Title || '(untitled parent)'}</option>)
             : <option value="">No parents yet</option>}
         </Select>
-        {canManageTasks && activeParent && <Button variant="ghost" size="sm" onClick={() => openEdit(activeParent)}>Edit parent</Button>}
+        <Button variant={mineOnly ? 'primary' : 'outline'} size="sm" onClick={() => setMineOnly((v) => !v)} disabled={!me} title="Show only tasks assigned to me">My tasks</Button>
+        {activeParent && <Button variant="ghost" size="sm" onClick={() => openEdit(activeParent)}>{canManageTasks ? 'Edit parent' : 'View parent'}</Button>}
         {canManageTasks && <Button variant="outline" onClick={openNewParent} disabled={!selected}><Plus size={16} /> New parent</Button>}
         {canManageTasks && <Button onClick={openNewSubtask} disabled={!selected || !parents.length}><Plus size={16} /> New sub-task</Button>}
       </PageHeader>
@@ -391,6 +456,7 @@ export function Tasks() {
                     onAssigneeChange={(rid) => changeAssignee(task, rid)}
                     resources={assignedResources}
                     canEdit={canEdit}
+                    allowUnassign={canManageTasks}
                   />
                 ))}
               </div>
@@ -462,7 +528,7 @@ export function Tasks() {
               </Field>
               <Field label="Assignee">
                 <Select value={form.assigneeId} disabled={formLocked} onChange={(e) => setForm({ ...form, assigneeId: e.target.value })}>
-                  <option value="">Unassigned</option>
+                  {(canManageTasks || !form.assigneeId) && <option value="">Unassigned</option>}
                   {assignedResources.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
                 </Select>
               </Field>
@@ -471,9 +537,6 @@ export function Tasks() {
                   <option value="">—</option>
                   {assignedResources.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
                 </Select>
-              </Field>
-              <Field label="Labels">
-                <Input value={form.labels} disabled={formLocked} onChange={(e) => setForm({ ...form, labels: e.target.value })} placeholder="comma, separated" />
               </Field>
               <Field label="Start date">
                 <Input type="date" value={form.startDate || ''} disabled={formLocked} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
@@ -495,6 +558,57 @@ export function Tasks() {
               <div>
                 <span style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, marginBottom: '0.4rem', color: 'var(--muted-foreground)' }}>Stage history</span>
                 <StageTimeline history={parseHistory(form.statusHistory)} />
+              </div>
+            )}
+            {form && (
+              <div style={{ marginTop: 16 }}>
+                <span style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, marginBottom: '0.4rem', color: 'var(--muted-foreground)' }}>Attachments</span>
+                {form._spId ? (
+                  attachments.length === 0 ? (
+                    <div style={{ fontSize: '0.8rem', color: 'var(--muted-foreground)' }}>No attachments.</div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {attachments.map((a) => (
+                        <div key={a.name} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem' }}>
+                          <Paperclip size={14} style={{ color: 'var(--muted-foreground)', flexShrink: 0 }} />
+                          <a href={a.url} target="_blank" rel="noreferrer" style={{ color: 'var(--primary)', textDecoration: 'none', wordBreak: 'break-all' }}>{a.name}</a>
+                          {canEdit && (
+                            <button onClick={() => removeAttachment(a.name)} disabled={attachBusy} aria-label="Remove attachment" title="Remove"
+                              style={{ marginLeft: 'auto', display: 'inline-flex', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--destructive)', padding: 2 }}>
+                              <Trash2 size={14} />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )
+                ) : (
+                  pendingFiles.length === 0 ? (
+                    <div style={{ fontSize: '0.8rem', color: 'var(--muted-foreground)' }}>No files yet — they'll upload when you create the task.</div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {pendingFiles.map((f, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem' }}>
+                          <Paperclip size={14} style={{ color: 'var(--muted-foreground)', flexShrink: 0 }} />
+                          <span style={{ wordBreak: 'break-all' }}>{f.name}</span>
+                          <button onClick={() => setPendingFiles((prev) => prev.filter((_, j) => j !== i))} aria-label="Remove file" title="Remove"
+                            style={{ marginLeft: 'auto', display: 'inline-flex', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--destructive)', padding: 2 }}>
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                )}
+                {canEdit && (
+                  <div style={{ marginTop: 8 }}>
+                    <input ref={fileInputRef} type="file" style={{ display: 'none' }}
+                      onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (!f) return; if (form._spId) uploadAttachment(f); else setPendingFiles((prev) => [...prev, f]); }} />
+                    <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} disabled={attachBusy}>
+                      <Paperclip size={14} /> {attachBusy ? 'Working…' : 'Attach file'}
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
             {form._spId && (
@@ -545,9 +659,10 @@ const inlineSelect = {
   background: 'var(--muted)', color: 'var(--foreground)', cursor: 'pointer',
 };
 
-function TaskCard({ task, assignee, dragging, onDragStart, onDragEnd, onDrop, onClick, onStatusChange, onAssigneeChange, resources, canEdit }) {
+function TaskCard({ task, assignee, dragging, onDragStart, onDragEnd, onDrop, onClick, onStatusChange, onAssigneeChange, resources, canEdit, allowUnassign }) {
   const TypeIcon = task.workItemType === 'Bug' ? Bug : CheckSquare;
   const typeColor = task.workItemType === 'Bug' ? 'var(--rag-red)' : 'var(--accent)';
+  const initials = (assignee || '').split(' ').map((s) => s[0]).filter(Boolean).slice(0, 2).join('').toUpperCase();
   // Inline controls are frozen when the task is closed OR the role can't write.
   const frozen = task.status === TERMINAL || !canEdit;
   const closed = task.status === TERMINAL;
@@ -573,7 +688,12 @@ function TaskCard({ task, assignee, dragging, onDragStart, onDragEnd, onDrop, on
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
         <TypeIcon size={14} color={typeColor} />
         <PriorityPill level={task.priority} />
-        {task.labels && <Badge>{task.labels.split(',')[0].trim()}</Badge>}
+        {assignee && (
+          <span title={`Assigned to ${assignee}`} style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: '60%' }}>
+            <span style={{ width: 20, height: 20, borderRadius: '50%', flexShrink: 0, background: 'var(--primary)', color: 'var(--primary-foreground)', fontSize: '0.6rem', fontWeight: 700, display: 'grid', placeItems: 'center' }}>{initials}</span>
+            <span style={{ fontSize: '0.72rem', color: 'var(--muted-foreground)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{assignee.split(' ')[0]}</span>
+          </span>
+        )}
       </div>
       <div style={{ fontSize: '0.85rem', fontWeight: 600, lineHeight: 1.3, marginBottom: 6 }}>{task.Title}</div>
       {(task.dueDate || (task.estimatedHours != null && task.estimatedHours !== '')) && (
@@ -610,7 +730,7 @@ function TaskCard({ task, assignee, dragging, onDragStart, onDragEnd, onDrop, on
           onChange={(e) => { e.stopPropagation(); onAssigneeChange(e.target.value); }}
           style={{ ...inlineSelect, ...(frozen ? { opacity: 0.5, cursor: 'not-allowed' } : null) }}
         >
-          <option value="">Unassigned</option>
+          {(allowUnassign || !task.assigneeId) && <option value="">Unassigned</option>}
           {assigneeOptions.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
         </select>
       </div>

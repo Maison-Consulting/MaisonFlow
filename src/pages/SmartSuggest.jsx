@@ -3,6 +3,7 @@ import { Sparkles, CalendarDays, Box, Plus, Check, Award, Users, Wand2 } from 'l
 import { useData } from '../context/DataContext.jsx';
 import { Card, Button, Select } from '../components/ui/primitives.jsx';
 import { PageHeader } from '../components/Layout.jsx';
+import { productsOverlap } from '../lib/schema.js';
 
 const LEVELS = ['—', 'Beginner', 'Basic', 'Intermediate', 'Advanced', 'Expert'];
 const levelLabel = (n) => LEVELS[Math.max(0, Math.min(5, Number(n) || 0))];
@@ -64,9 +65,9 @@ export function SmartSuggest() {
     return data.Resource
       .filter((r) => region === 'All' || r.location === region)
       .filter((r) => type === 'All' || r.role === type)
-      // Restrict to the project's product, but keep resources that don't declare
-      // a product — only exclude those explicitly tagged with a DIFFERENT one.
-      .filter((r) => !product || !r.product || r.product === product)
+      // Keep resources that share at least one product with the project (an
+      // empty product on either side is treated as no restriction).
+      .filter((r) => productsOverlap(product, r.product))
       // Exclude anyone already on THIS project within the window.
       .filter((r) => !data.ProjectAssignment.some(
         (a) => a.resourceId === r.resourceId && a.projectId === project.projectId && overlaps(a, from, to)

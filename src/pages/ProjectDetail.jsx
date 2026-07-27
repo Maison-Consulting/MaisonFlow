@@ -1,16 +1,18 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ChevronLeft, Plus, Trash2, Pencil } from 'lucide-react';
+import { ChevronLeft, Plus, Trash2, Pencil, Paperclip } from 'lucide-react';
 import { useData } from '../context/DataContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { PROJECT_ROLES, projectRoleFor } from '../lib/permissions.js';
-import { PRODUCTS } from '../lib/schema.js';
-import { Card, CardContent, Button, Input, Select, Textarea, Field } from '../components/ui/primitives.jsx';
+import { productsOverlap, MEETING_TYPES } from '../lib/schema.js';
+import { listAttachments, addAttachment, deleteAttachment } from '../lib/spClient.js';
+import { ProductSelect } from '../components/ProductSelect.jsx';
+import { Card, CardContent, Button, Input, Select, Textarea, Field, useToast } from '../components/ui/primitives.jsx';
 import { Dialog, Table } from '../components/ui/Dialog.jsx';
 import { RagDot, RagBadge, SeverityPill, PaymentStatusPill, PriorityPill, money, fmtDate, effectivePaymentStatus } from '../components/pills.jsx';
 import { LineChart } from '../components/charts/Charts.jsx';
 
-const TABS = ['Overview', 'Assignments', 'Tasks', 'Tracking', 'Risks', 'Meetings', 'Payments'];
+const TABS = ['Overview', 'Assignments', 'Tasks', 'Risks', 'Meetings', 'Payments'];
 
 const RAG_OPTIONS = ['Green', 'Amber', 'Red'];
 const TASK_TYPE_OPTIONS = ['Task', 'Bug'];
@@ -20,7 +22,7 @@ const TASK_PRIORITY_OPTIONS = ['Critical', 'High', 'Medium', 'Low'];
 const SEVERITY_OPTIONS = ['Low', 'Medium', 'High', 'Critical'];
 const PROBABILITY_OPTIONS = ['Low', 'Medium', 'High'];
 const RISK_STATUS_OPTIONS = ['Open', 'Mitigating', 'Closed'];
-const PAYMENT_STATUS_OPTIONS = ['Pending', 'Invoiced', 'Paid', 'Overdue'];
+const PAYMENT_STATUS_OPTIONS = ['Pending', 'Invoiced', 'Partial', 'Paid', 'Overdue'];
 
 // Add/Edit form config per entity. `numbers` lists fields coerced to Number on save.
 const FORMS = {
@@ -53,7 +55,6 @@ const FORMS = {
       { name: 'dueDate', label: 'Due', type: 'date', half: true },
       { name: 'estimatedHours', label: 'Est. hours', type: 'number', min: 0, half: true },
       { name: 'loggedHours', label: 'Logged hours', type: 'number', min: 0, half: true },
-      { name: 'labels', label: 'Labels', type: 'text' },
       { name: 'description', label: 'Description', type: 'textarea' },
     ],
   },
@@ -85,10 +86,11 @@ const FORMS = {
   },
   SteeringMeeting: {
     label: 'meeting',
-    empty: { meetingDate: '', attendees: '', agenda: '', decisions: '', actionItems: '' },
+    empty: { meetingType: MEETING_TYPES[0], meetingDate: '', attendees: '', agenda: '', decisions: '', actionItems: '' },
     numbers: [],
     fields: [
-      { name: 'meetingDate', label: 'Date', type: 'date' },
+      { name: 'meetingType', label: 'Type', type: 'select', options: MEETING_TYPES, half: true },
+      { name: 'meetingDate', label: 'Date', type: 'date', half: true },
       { name: 'attendees', label: 'Attendees', type: 'textarea' },
       { name: 'agenda', label: 'Agenda', type: 'textarea' },
       { name: 'decisions', label: 'Decisions', type: 'textarea' },
@@ -97,7 +99,7 @@ const FORMS = {
   },
   ProjectPayment: {
     label: 'payment',
-    empty: { milestone: '', amount: 0, currency: 'USD', dueDate: '', invoiceNumber: '', invoiceDate: '', status: 'Pending' },
+    empty: { milestone: '', amount: 0, currency: 'USD', dueDate: '', invoiceNumber: '', invoiceDate: '', paymentDate: '', status: 'Pending' },
     numbers: ['amount'],
     fields: [
       { name: 'milestone', label: 'Milestone', type: 'text' },
@@ -106,8 +108,10 @@ const FORMS = {
       { name: 'dueDate', label: 'Due date', type: 'date', half: true },
       { name: 'invoiceNumber', label: 'Invoice #', type: 'text', half: true },
       { name: 'status', label: 'Status', type: 'select', options: PAYMENT_STATUS_OPTIONS },
-      // Only relevant once an invoice exists — shown when Invoiced or Paid.
-      { name: 'invoiceDate', label: 'Invoice date', type: 'date', half: true, showIf: (f) => ['Invoiced', 'Paid'].includes(f.status) },
+      // Only relevant once an invoice exists — shown when Invoiced/Partial/Paid.
+      { name: 'invoiceDate', label: 'Invoice date', type: 'date', half: true, showIf: (f) => ['Invoiced', 'Partial', 'Paid'].includes(f.status) },
+      // Date payment was received — shown when Partial or Paid.
+      { name: 'paymentDate', label: 'Payment date', type: 'date', half: true, showIf: (f) => ['Partial', 'Paid'].includes(f.status) },
     ],
   },
 };
@@ -136,6 +140,11 @@ export function ProjectDetail() {
   const [editForm, setEditForm] = useState(null);
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
+  const toast = useToast();
+  const fileInputRef = useRef(null);
+  const [attachments, setAttachments] = useState([]);
+  const [attachBusy, setAttachBusy] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState([]); // files chosen while creating a task (uploaded after save)
 
   // Project (header) edit dialog — separate from the generic child-entity dialog.
   const [projOpen, setProjOpen] = useState(false);
@@ -152,7 +161,7 @@ export function ProjectDetail() {
   // Assignment resource picker prefers resources sharing the project's product,
   // but falls back to ALL resources when the project has no product or none
   // match — so the dropdown is never empty and you can always assign someone.
-  const productMatched = project.product ? data.Resource.filter((r) => r.product === project.product) : [];
+  const productMatched = data.Resource.filter((r) => productsOverlap(project.product, r.product));
   const assignableByProduct = productMatched.length ? productMatched : data.Resource;
   // Resources staffed on this project — the pool the task assignee picker draws from.
   const assignedResources = (() => {
@@ -165,7 +174,7 @@ export function ProjectDetail() {
   function openCreate(entity, overrides = {}) {
     const empty = { ...FORMS[entity].empty, ...overrides };
     if (entity === 'ProjectAssignment' && !empty.resourceId) empty.resourceId = assignableByProduct[0]?.resourceId || '';
-    setEditError('');
+    setEditError(''); setPendingFiles([]);
     setEditEntity(entity);
     setEditForm(empty);
   }
@@ -178,7 +187,7 @@ export function ProjectDetail() {
       if (fl.type === 'date' && v) v = String(v).slice(0, 10);
       f[fl.name] = v;
     });
-    setEditError('');
+    setEditError(''); setPendingFiles([]);
     setEditEntity(entity);
     setEditForm(f);
   }
@@ -191,8 +200,20 @@ export function ProjectDetail() {
     setEditSaving(true);
     setEditError('');
     try {
-      if (_spId) await update(editEntity, _spId, payload);
-      else await create(editEntity, { ...payload, projectId: id });
+      if (_spId) {
+        await update(editEntity, _spId, payload);
+      } else {
+        const saved = await create(editEntity, { ...payload, projectId: id });
+        // Upload files chosen while creating a task, now that the item exists.
+        if (editEntity === 'ProjectTask' && saved?._spId && pendingFiles.length) {
+          let failed = 0;
+          for (const f of pendingFiles) {
+            try { await addAttachment('ProjectTask', saved._spId, f); } catch { failed += 1; }
+          }
+          if (failed) toast(`${failed} attachment(s) couldn't be uploaded.`, 'error');
+          setPendingFiles([]);
+        }
+      }
       closeEdit();
     } catch (e) {
       // Surface the failure inline so a rejected save no longer looks like
@@ -206,13 +227,51 @@ export function ProjectDetail() {
     if (window.confirm('Delete this record?')) remove(entity, spId);
   }
 
+  // ── Task attachments (SharePoint list-item attachments) ───────────────────
+  const editingTaskSpId = editEntity === 'ProjectTask' ? editForm?._spId : null;
+  useEffect(() => {
+    if (!editingTaskSpId) { setAttachments([]); return; }
+    let cancelled = false;
+    listAttachments('ProjectTask', editingTaskSpId)
+      .then((a) => { if (!cancelled) setAttachments(a); })
+      .catch(() => { if (!cancelled) setAttachments([]); });
+    return () => { cancelled = true; };
+  }, [editingTaskSpId]);
+
+  async function uploadAttachment(file) {
+    if (!file || !editingTaskSpId) return;
+    setAttachBusy(true);
+    try {
+      await addAttachment('ProjectTask', editingTaskSpId, file);
+      setAttachments(await listAttachments('ProjectTask', editingTaskSpId));
+      toast('Attachment added');
+    } catch (e) {
+      toast(`Couldn't attach file: ${e.message}`, 'error');
+    } finally {
+      setAttachBusy(false);
+    }
+  }
+  async function removeAttachment(fileName) {
+    if (!editingTaskSpId) return;
+    setAttachBusy(true);
+    try {
+      await deleteAttachment('ProjectTask', editingTaskSpId, fileName);
+      setAttachments((prev) => prev.filter((x) => x.name !== fileName));
+      toast('Attachment removed');
+    } catch (e) {
+      toast(`Couldn't remove attachment: ${e.message}`, 'error');
+    } finally {
+      setAttachBusy(false);
+    }
+  }
+
   // ── Project header edit ──────────────────────────────────────────────────
   function openProjectEdit() {
     setProjError('');
     setProjForm({
       name: project.projectName || project.name || '',
       client: project.client || '',
-      product: project.product || PRODUCTS[0],
+      product: project.product || '',
       startDate: project.startDate ? String(project.startDate).slice(0, 10) : '',
       endDate: project.endDate ? String(project.endDate).slice(0, 10) : '',
       budget: project.budget ?? 0,
@@ -296,6 +355,7 @@ export function ProjectDetail() {
   const taskParents = projectTasks.filter((t) => !t.parentId);
   const activeTaskParentId = taskParentId && taskParents.some((p) => p.taskId === taskParentId)
     ? taskParentId : (taskParents[0]?.taskId || '');
+  const activeTaskParent = taskParents.find((p) => p.taskId === activeTaskParentId) || null;
   const projectSubtasks = projectTasks.filter((t) => t.parentId && t.parentId === activeTaskParentId);
 
   return (
@@ -376,6 +436,7 @@ export function ProjectDetail() {
                   : <option value="">No parents yet</option>}
               </Select>
               <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                {activeTaskParent && <Button variant="ghost" size="sm" onClick={() => openEdit('ProjectTask', activeTaskParent)}>{canManageProject ? 'Edit parent' : 'View parent'}</Button>}
                 {canManageProject && <Button variant="outline" size="sm" onClick={() => openCreate('ProjectTask', { parentId: '' })}><Plus size={16} /> New parent</Button>}
                 {canManageProject && <Button size="sm" onClick={() => openCreate('ProjectTask', { parentId: activeTaskParentId })} disabled={!taskParents.length}><Plus size={16} /> New sub-task</Button>}
               </div>
@@ -420,7 +481,7 @@ export function ProjectDetail() {
           <div>
             {canManageProject && <TabToolbar onAdd={() => openCreate('SteeringMeeting')} label="Add meeting" />}
             <Table empty="No meetings."
-              columns={[{ key: 'meetingDate', label: 'Date', render: (r) => fmtDate(r.meetingDate) }, { key: 'attendees', label: 'Attendees' }, { key: 'decisions', label: 'Decisions' }, actionsCol('SteeringMeeting')].filter(Boolean)}
+              columns={[{ key: 'meetingType', label: 'Type', render: (r) => r.meetingType || '—' }, { key: 'meetingDate', label: 'Date', render: (r) => fmtDate(r.meetingDate) }, { key: 'attendees', label: 'Attendees' }, { key: 'decisions', label: 'Decisions' }, actionsCol('SteeringMeeting')].filter(Boolean)}
               rows={byProject('SteeringMeeting')} />
           </div>
         )}
@@ -428,7 +489,7 @@ export function ProjectDetail() {
           <div>
             {canManageProject && <TabToolbar onAdd={() => openCreate('ProjectPayment')} label="Add payment" />}
             <Table empty="No payments."
-              columns={[{ key: 'milestone', label: 'Milestone' }, { key: 'amount', label: 'Amount', render: (r) => money(r.amount, r.currency) }, { key: 'dueDate', label: 'Due', render: (r) => fmtDate(r.dueDate) }, { key: 'invoiceDate', label: 'Invoiced', render: (r) => fmtDate(r.invoiceDate) }, { key: 'status', label: 'Status', render: (r) => <PaymentStatusPill status={effectivePaymentStatus(r)} /> }, actionsCol('ProjectPayment')].filter(Boolean)}
+              columns={[{ key: 'milestone', label: 'Milestone' }, { key: 'amount', label: 'Amount', render: (r) => money(r.amount, r.currency) }, { key: 'dueDate', label: 'Due', render: (r) => fmtDate(r.dueDate) }, { key: 'invoiceDate', label: 'Invoiced', render: (r) => fmtDate(r.invoiceDate) }, { key: 'paymentDate', label: 'Paid on', render: (r) => fmtDate(r.paymentDate) }, { key: 'status', label: 'Status', render: (r) => <PaymentStatusPill status={effectivePaymentStatus(r)} /> }, actionsCol('ProjectPayment')].filter(Boolean)}
               rows={byProject('ProjectPayment')} />
           </div>
         )}
@@ -449,9 +510,7 @@ export function ProjectDetail() {
           <Field label="Name"><Input value={projForm.name} onChange={(e) => setProjForm({ ...projForm, name: e.target.value })} /></Field>
           <Field label="Client"><Input value={projForm.client} onChange={(e) => setProjForm({ ...projForm, client: e.target.value })} /></Field>
           <Field label="Product">
-            <Select value={projForm.product} onChange={(e) => setProjForm({ ...projForm, product: e.target.value })}>
-              {PRODUCTS.map((p) => <option key={p}>{p}</option>)}
-            </Select>
+            <ProductSelect value={projForm.product} onChange={(v) => setProjForm({ ...projForm, product: v })} />
           </Field>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <Field label="Start date"><Input type="date" value={projForm.startDate} onChange={(e) => setProjForm({ ...projForm, startDate: e.target.value })} /></Field>
@@ -517,6 +576,57 @@ export function ProjectDetail() {
                 </Field>
               </div>
             ))}
+            {editEntity === 'ProjectTask' && (
+              <div style={{ gridColumn: 'span 2', marginTop: 4 }}>
+                <span style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, marginBottom: '0.4rem', color: 'var(--muted-foreground)' }}>Attachments</span>
+                {editingTaskSpId ? (
+                  attachments.length === 0 ? (
+                    <div style={{ fontSize: '0.8rem', color: 'var(--muted-foreground)' }}>No attachments.</div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {attachments.map((a) => (
+                        <div key={a.name} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem' }}>
+                          <Paperclip size={14} style={{ color: 'var(--muted-foreground)', flexShrink: 0 }} />
+                          <a href={a.url} target="_blank" rel="noreferrer" style={{ color: 'var(--primary)', textDecoration: 'none', wordBreak: 'break-all' }}>{a.name}</a>
+                          {canWrite('ProjectTask') && (
+                            <button onClick={() => removeAttachment(a.name)} disabled={attachBusy} aria-label="Remove attachment" title="Remove"
+                              style={{ marginLeft: 'auto', display: 'inline-flex', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--destructive)', padding: 2 }}>
+                              <Trash2 size={14} />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )
+                ) : (
+                  pendingFiles.length === 0 ? (
+                    <div style={{ fontSize: '0.8rem', color: 'var(--muted-foreground)' }}>No files yet — they'll upload when you add the task.</div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {pendingFiles.map((f, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem' }}>
+                          <Paperclip size={14} style={{ color: 'var(--muted-foreground)', flexShrink: 0 }} />
+                          <span style={{ wordBreak: 'break-all' }}>{f.name}</span>
+                          <button onClick={() => setPendingFiles((prev) => prev.filter((_, j) => j !== i))} aria-label="Remove file" title="Remove"
+                            style={{ marginLeft: 'auto', display: 'inline-flex', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--destructive)', padding: 2 }}>
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                )}
+                {canWrite('ProjectTask') && (
+                  <div style={{ marginTop: 8 }}>
+                    <input ref={fileInputRef} type="file" style={{ display: 'none' }}
+                      onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (!f) return; if (editingTaskSpId) uploadAttachment(f); else setPendingFiles((prev) => [...prev, f]); }} />
+                    <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} disabled={attachBusy}>
+                      <Paperclip size={14} /> {attachBusy ? 'Working…' : 'Attach file'}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </Dialog>

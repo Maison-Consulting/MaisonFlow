@@ -6,10 +6,10 @@ import { Card, CardContent, Button, Input, Select, Field, Skeleton } from '../co
 import { Dialog } from '../components/ui/Dialog.jsx';
 import { PageHeader } from '../components/Layout.jsx';
 import { RagDot, RagBadge, money, fmtDate } from '../components/pills.jsx';
-import { PRODUCTS } from '../lib/schema.js';
+import { ProductSelect } from '../components/ProductSelect.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 
-const EMPTY = { name: '', client: '', product: PRODUCTS[0], startDate: '', endDate: '', budget: 0, status: 'Planned', ragStatus: 'Green', managerId: '', devLeadId: '', functionalLeadId: '' };
+const EMPTY = { name: '', client: '', product: '', startDate: '', endDate: '', budget: 0, status: 'Planned', ragStatus: 'Green', managerId: '', devLeadId: '', functionalLeadId: '' };
 
 export function Projects() {
   const navigate = useNavigate();
@@ -42,7 +42,7 @@ export function Projects() {
           <Search size={15} style={{ position: 'absolute', left: 10, top: 9, color: 'var(--muted-foreground)' }} />
           <Input placeholder="Search projects…" value={query} onChange={(e) => setQuery(e.target.value)} style={{ paddingLeft: 30, width: 220 }} />
         </div>
-        {canEdit && <Button onClick={() => { setForm(EMPTY); setError(''); setOpen(true); }}><Plus size={16} /> New Project</Button>}
+        {canEdit && <Button onClick={() => { setForm({ ...EMPTY, startDate: new Date().toISOString().slice(0, 10) }); setError(''); setOpen(true); }}><Plus size={16} /> New Project</Button>}
       </PageHeader>
 
       {loading.Project ? (
@@ -95,9 +95,7 @@ export function Projects() {
         <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
         <Field label="Client"><Input value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value })} /></Field>
         <Field label="Product">
-          <Select value={form.product} onChange={(e) => setForm({ ...form, product: e.target.value })}>
-            {PRODUCTS.map((p) => <option key={p}>{p}</option>)}
-          </Select>
+          <ProductSelect value={form.product} onChange={(v) => setForm({ ...form, product: v })} />
         </Field>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <Field label="Start date"><Input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} /></Field>

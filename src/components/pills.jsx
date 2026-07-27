@@ -35,6 +35,7 @@ export function ResourceStatusPill({ status }) {
 const PAYMENT_STATUS = {
   Pending: 'var(--pay-pending)',
   Invoiced: 'var(--pay-invoiced)',
+  Partial: 'var(--rag-amber)',
   Paid: 'var(--pay-paid)',
   Overdue: 'var(--pay-overdue)',
 };

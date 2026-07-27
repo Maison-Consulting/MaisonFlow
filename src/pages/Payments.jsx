@@ -7,7 +7,7 @@ import { Dialog, Table } from '../components/ui/Dialog.jsx';
 import { PageHeader } from '../components/Layout.jsx';
 import { PaymentStatusPill, money, fmtDate, isPaymentOverdue, effectivePaymentStatus } from '../components/pills.jsx';
 
-const FILTERS = ['All', 'Pending', 'Invoiced', 'Paid', 'Overdue'];
+const FILTERS = ['All', 'Pending', 'Invoiced', 'Partial', 'Paid', 'Overdue'];
 const iconBtnStyle = { display: 'inline-flex', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--muted-foreground)', padding: 4, borderRadius: 6 };
 
 export function Payments() {
@@ -50,11 +50,11 @@ export function Payments() {
   }, [data.ProjectPayment]);
 
   function openNew() {
-    setForm({ projectId: data.Project[0]?.projectId || '', milestone: '', amount: 0, currency: 'USD', dueDate: '', invoiceNumber: '', invoiceDate: '', status: 'Pending' });
+    setForm({ projectId: data.Project[0]?.projectId || '', milestone: '', amount: 0, currency: 'USD', dueDate: '', invoiceNumber: '', invoiceDate: '', paymentDate: '', status: 'Pending' });
     setOpen(true);
   }
   function openEdit(row) {
-    setForm({ _spId: row._spId, projectId: row.projectId, milestone: row.milestone || '', amount: row.amount ?? 0, currency: row.currency || 'USD', dueDate: row.dueDate ? String(row.dueDate).slice(0, 10) : '', invoiceNumber: row.invoiceNumber || '', invoiceDate: row.invoiceDate ? String(row.invoiceDate).slice(0, 10) : '', status: row.status || 'Pending' });
+    setForm({ _spId: row._spId, projectId: row.projectId, milestone: row.milestone || '', amount: row.amount ?? 0, currency: row.currency || 'USD', dueDate: row.dueDate ? String(row.dueDate).slice(0, 10) : '', invoiceNumber: row.invoiceNumber || '', invoiceDate: row.invoiceDate ? String(row.invoiceDate).slice(0, 10) : '', paymentDate: row.paymentDate ? String(row.paymentDate).slice(0, 10) : '', status: row.status || 'Pending' });
     setOpen(true);
   }
   async function save() {
@@ -123,11 +123,14 @@ export function Payments() {
           <Field label="Invoice number (optional)"><Input value={form.invoiceNumber} onChange={(e) => setForm({ ...form, invoiceNumber: e.target.value })} /></Field>
           <Field label="Status">
             <Select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-              <option>Pending</option><option>Invoiced</option><option>Paid</option><option>Overdue</option>
+              <option>Pending</option><option>Invoiced</option><option>Partial</option><option>Paid</option><option>Overdue</option>
             </Select>
           </Field>
-          {['Invoiced', 'Paid'].includes(form.status) && (
+          {['Invoiced', 'Partial', 'Paid'].includes(form.status) && (
             <Field label="Invoice date"><Input type="date" value={form.invoiceDate || ''} onChange={(e) => setForm({ ...form, invoiceDate: e.target.value })} /></Field>
+          )}
+          {['Partial', 'Paid'].includes(form.status) && (
+            <Field label="Payment date"><Input type="date" value={form.paymentDate || ''} onChange={(e) => setForm({ ...form, paymentDate: e.target.value })} /></Field>
           )}
         </>}
       </Dialog>

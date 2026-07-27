@@ -29,9 +29,8 @@ const SECTIONS = [
   {
     label: 'Governance',
     items: [
-      { to: '/tracking', label: 'Tracking', icon: TrendingUp },
       { to: '/risks', label: 'Risks', icon: AlertTriangle },
-      { to: '/meetings', label: 'Steering Meetings', icon: Armchair },
+      { to: '/meetings', label: 'Meetings', icon: Armchair },
       { to: '/payments', label: 'Payments', icon: Wallet },
     ],
   },
