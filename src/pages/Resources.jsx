@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Plus, Search, MoreHorizontal, Mail, Sparkles, X } from 'lucide-react';
+import { Plus, Search, MoreHorizontal, Mail, Sparkles, X, CalendarDays } from 'lucide-react';
 import { useData } from '../context/DataContext.jsx';
 import { Card, Button, Input, Select, Field, Skeleton, useToast } from '../components/ui/primitives.jsx';
 import { Dialog, Table } from '../components/ui/Dialog.jsx';
@@ -7,8 +7,10 @@ import { PageHeader } from '../components/Layout.jsx';
 import { ResourceStatusPill } from '../components/pills.jsx';
 import { useDebounced } from '../lib/useDebounced.js';
 import { ProductSelect } from '../components/ProductSelect.jsx';
+import { TimesheetCalendar } from '../components/TimesheetCalendar.jsx';
 import { ROLES, DEFAULT_ROLE } from '../lib/permissions.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useSubmitGuard } from '../lib/useSubmitGuard.js';
 
 const EMPTY = { fullName: '', email: '', role: '', department: '', location: '', product: '', weeklyCapacityHours: 40, status: 'Active', appRole: DEFAULT_ROLE };
 
@@ -40,6 +42,7 @@ function isActive(a, today) {
 }
 
 export function Resources() {
+  const [busy, guard] = useSubmitGuard(); // blocks double-submit on save
   const { data, loading, create, update, remove } = useData();
   const { role: myRole, canWrite } = useAuth();
   const isAdmin = myRole === 'Admin';
@@ -53,6 +56,7 @@ export function Resources() {
   const [confirmDel, setConfirmDel] = useState(null);
   const [menuFor, setMenuFor] = useState(null);
   const [detail, setDetail] = useState(null); // resource row being viewed
+  const [calRes, setCalRes] = useState(null); // resource whose timesheet calendar is open
 
   const rows = useMemo(() => {
     const q = debounced.toLowerCase();
@@ -94,6 +98,14 @@ export function Resources() {
     { key: 'location', label: 'Location' },
     { key: 'weeklyCapacityHours', label: 'Capacity', render: (r) => `${r.weeklyCapacityHours || 0}h` },
     { key: 'status', label: 'Status', render: (r) => <ResourceStatusPill status={r.status} /> },
+    {
+      key: 'timesheet', label: '', sortable: false, width: 48,
+      render: (r) => (
+        <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setCalRes(r); }} aria-label="Timesheet calendar" title="Timesheet calendar">
+          <CalendarDays size={16} />
+        </Button>
+      ),
+    },
     ...(canEdit ? [{
       key: 'actions', label: '', sortable: false, width: 48,
       render: (r) => (
@@ -132,7 +144,7 @@ export function Resources() {
         title={editing?._spId ? 'Edit resource' : 'Add resource'}
         footer={<>
           <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
-          <Button onClick={save}>{editing?._spId ? 'Save changes' : 'Add resource'}</Button>
+          <Button onClick={guard(save)} disabled={busy}>{busy ? 'Saving…' : editing?._spId ? 'Save changes' : 'Add resource'}</Button>
         </>}
       >
         <Field label="Full name" required><Input value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} /></Field>
@@ -171,6 +183,8 @@ export function Resources() {
         </Field>
       </Dialog>
 
+      <TimesheetCalendar resource={calRes} open={!!calRes} onClose={() => setCalRes(null)} />
+
       {detail && (
         <ResourceDetail
           resource={detail}
@@ -186,7 +200,7 @@ export function Resources() {
         open={!!confirmDel} onClose={() => setConfirmDel(null)} title="Delete resource" width={400}
         footer={<>
           <Button variant="outline" onClick={() => setConfirmDel(null)}>Cancel</Button>
-          <Button variant="destructive" onClick={async () => { await remove('Resource', confirmDel._spId); setConfirmDel(null); }}>Delete</Button>
+          <Button variant="destructive" onClick={async () => { await remove('Resource', confirmDel._spId, { confirm: false }); setConfirmDel(null); }}>Delete</Button>
         </>}
       >
         Delete <strong>{confirmDel?.fullName}</strong>? This can't be undone.
@@ -198,12 +212,13 @@ export function Resources() {
 // Read-only resource profile: contact, meta, mapped skills (with inline add),
 // and active assignments.
 function ResourceDetail({ resource, onClose, data, create, remove, canEdit }) {
+  const [busy, guard] = useSubmitGuard(); // blocks double-submit on save
   const today = new Date().toISOString().slice(0, 10);
   const [adding, setAdding] = useState(false);
   const [skillForm, setSkillForm] = useState({ skillId: '', proficiency: 3 });
 
   const skillName = (id) => { const s = data.Skill.find((x) => x.skillId === id); return s?.name || s?.skillName || id; };
-  const projectName = (id) => data.Project.find((p) => p.projectId === id)?.projectName || id;
+  const projectName = (id) => { const p = data.Project.find((x) => x.projectId === id); return p?.projectName || p?.name || id; };
 
   const skills = useMemo(
     () => data.ResourceSkill.filter((rs) => rs.resourceId === resource.resourceId),
@@ -267,7 +282,7 @@ function ResourceDetail({ resource, onClose, data, create, remove, canEdit }) {
           <div style={{ width: 140 }}>
             <Field label={`Proficiency (${skillForm.proficiency}/5)`}><Input type="range" min={1} max={5} value={skillForm.proficiency} onChange={(e) => setSkillForm({ ...skillForm, proficiency: e.target.value })} /></Field>
           </div>
-          <Button onClick={addSkill} style={{ marginBottom: '0.75rem' }}>Add</Button>
+          <Button onClick={guard(addSkill)} disabled={busy} style={{ marginBottom: '0.75rem' }}>{busy ? 'Adding…' : 'Add'}</Button>
           <Button variant="outline" onClick={() => setAdding(false)} style={{ marginBottom: '0.75rem' }}>Cancel</Button>
         </div>
       )}

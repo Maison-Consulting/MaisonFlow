@@ -9,6 +9,7 @@ import { PriorityPill, fmtDate } from '../components/pills.jsx';
 import { sendTaskAssignedEmail, sendMentionEmail } from '../lib/notify.js';
 import { graphSearchUsers } from '../lib/graphClient.js';
 import { listAttachments, addAttachment, deleteAttachment } from '../lib/spClient.js';
+import { useSubmitGuard } from '../lib/useSubmitGuard.js';
 
 // Board columns, in order. `status` values must match these labels.
 const COLUMNS = ['New', 'Open', 'In Progress', 'On Hold', 'Resolved', 'Closed'];
@@ -73,6 +74,7 @@ function parseDiscussion(raw) {
 }
 
 export function Tasks() {
+  const [busy, guard] = useSubmitGuard(); // blocks double-submit on save
   const { data, loading, create, update, remove } = useData();
   const { canWrite, me, email, canManageProject } = useAuth();
   const canEdit = canWrite('ProjectTask');
@@ -230,6 +232,7 @@ export function Tasks() {
   }
   async function removeAttachment(name) {
     if (!form?._spId) return;
+    if (!window.confirm(`Remove attachment "${name}"?`)) return;
     setAttachBusy(true);
     try {
       await deleteAttachment('ProjectTask', form._spId, name);
@@ -407,7 +410,7 @@ export function Tasks() {
             : <option value="">No parents yet</option>}
         </Select>
         <Button variant={mineOnly ? 'primary' : 'outline'} size="sm" onClick={() => setMineOnly((v) => !v)} disabled={!me} title="Show only tasks assigned to me">My tasks</Button>
-        {activeParent && <Button variant="ghost" size="sm" onClick={() => openEdit(activeParent)}>{canManageTasks ? 'Edit parent' : 'View parent'}</Button>}
+        {activeParent && <Button variant="outline" size="sm" onClick={() => openEdit(activeParent)}>{canManageTasks ? 'Edit parent' : 'View parent'}</Button>}
         {canManageTasks && <Button variant="outline" onClick={openNewParent} disabled={!selected}><Plus size={16} /> New parent</Button>}
         {canManageTasks && <Button onClick={openNewSubtask} disabled={!selected || !parents.length}><Plus size={16} /> New sub-task</Button>}
       </PageHeader>
@@ -454,7 +457,7 @@ export function Tasks() {
                     onClick={() => openEdit(task)}
                     onStatusChange={(s) => changeStatus(task, s)}
                     onAssigneeChange={(rid) => changeAssignee(task, rid)}
-                    resources={assignedResources}
+                    resources={data.Resource}
                     canEdit={canEdit}
                     allowUnassign={canManageTasks}
                   />
@@ -480,7 +483,7 @@ export function Tasks() {
             <Button variant="outline" onClick={() => setOpen(false)}>{canEdit ? 'Cancel' : 'Close'}</Button>
             {canEdit && (locked
               ? <Button onClick={reopen}>Reopen</Button>
-              : <Button onClick={save}>{form?._spId ? 'Save' : (form?.parentId ? 'Create sub-task' : 'Create parent')}</Button>)}
+              : <Button onClick={guard(save)} disabled={busy}>{busy ? 'Saving…' : form?._spId ? 'Save' : (form?.parentId ? 'Create sub-task' : 'Create parent')}</Button>)}
           </>
         }
       >
@@ -529,13 +532,13 @@ export function Tasks() {
               <Field label="Assignee">
                 <Select value={form.assigneeId} disabled={formLocked} onChange={(e) => setForm({ ...form, assigneeId: e.target.value })}>
                   {(canManageTasks || !form.assigneeId) && <option value="">Unassigned</option>}
-                  {assignedResources.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
+                  {data.Resource.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
                 </Select>
               </Field>
               <Field label="Reporter">
                 <Select value={form.reporterId} disabled={formLocked} onChange={(e) => setForm({ ...form, reporterId: e.target.value })}>
                   <option value="">—</option>
-                  {assignedResources.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
+                  {data.Resource.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
                 </Select>
               </Field>
               <Field label="Start date">

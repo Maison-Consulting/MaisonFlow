@@ -11,11 +11,24 @@ import { ensureProvisioned } from '../lib/provision.js';
 export function Layout() {
   const [open, setOpen] = useState(window.innerWidth > 900);
   const [provisioning, setProvisioning] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const { reload, fatalError } = useData();
   const { role } = useAuth();
   const isAdmin = role === 'Admin';
   const toast = useToast();
   const isMobile = window.innerWidth <= 900;
+
+  async function refresh() {
+    setRefreshing(true);
+    try {
+      await reload();
+      toast('Data refreshed');
+    } catch (err) {
+      toast(`Refresh failed: ${err.message}`, 'error');
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   async function provision() {
     setProvisioning(true);
@@ -65,8 +78,8 @@ export function Layout() {
               <DatabaseZap size={15} /> {provisioning ? 'Provisioning…' : 'Provision lists'}
             </Button>
           )}
-          <Button variant="ghost" size="icon" onClick={() => reload()} aria-label="Reload data">
-            <RefreshCw size={16} />
+          <Button variant="outline" size="sm" onClick={refresh} disabled={refreshing} aria-label="Refresh data from SharePoint" title="Refresh data from SharePoint">
+            <RefreshCw size={15} style={refreshing ? { animation: 'mf-spin 0.8s linear infinite' } : undefined} /> {refreshing ? 'Refreshing…' : 'Refresh'}
           </Button>
           <UserMenu />
         </header>
@@ -178,7 +191,7 @@ export function PageHeader({ title, children }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem', flexWrap: 'wrap', gap: 12 }}>
       <h1 style={{ fontSize: '1.5rem', fontWeight: 800 }}>{title}</h1>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>{children}</div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>{children}</div>
     </div>
   );
 }

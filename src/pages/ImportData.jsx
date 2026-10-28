@@ -79,7 +79,7 @@ export function ImportData() {
       </p>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12 }}>
-        {SCHEMA.map((def) => {
+        {SCHEMA.filter((def) => def.name !== 'AppSetting').map((def) => {
           const entry = state[def.name];
           const p = entry?.parsed;
           return (

@@ -4,13 +4,16 @@ import { ChevronLeft, Plus, Trash2, Pencil, Paperclip } from 'lucide-react';
 import { useData } from '../context/DataContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { PROJECT_ROLES, projectRoleFor } from '../lib/permissions.js';
-import { productsOverlap, MEETING_TYPES } from '../lib/schema.js';
+import { productsOverlap } from '../lib/schema.js';
 import { listAttachments, addAttachment, deleteAttachment } from '../lib/spClient.js';
+import { assignmentExceeds100 } from '../lib/allocation.js';
+import { sendTaskAssignedEmail } from '../lib/notify.js';
 import { ProductSelect } from '../components/ProductSelect.jsx';
 import { Card, CardContent, Button, Input, Select, Textarea, Field, useToast } from '../components/ui/primitives.jsx';
 import { Dialog, Table } from '../components/ui/Dialog.jsx';
-import { RagDot, RagBadge, SeverityPill, PaymentStatusPill, PriorityPill, money, fmtDate, effectivePaymentStatus } from '../components/pills.jsx';
+import { RagDot, RagBadge, SeverityPill, PaymentStatusPill, PriorityPill, money, fmtDate, effectivePaymentStatus, isExpired } from '../components/pills.jsx';
 import { LineChart } from '../components/charts/Charts.jsx';
+import { useSubmitGuard } from '../lib/useSubmitGuard.js';
 
 const TABS = ['Overview', 'Assignments', 'Tasks', 'Risks', 'Meetings', 'Payments'];
 
@@ -34,8 +37,8 @@ const FORMS = {
       { name: 'resourceId', label: 'Resource', type: 'resource' },
       { name: 'role', label: 'Role on project', type: 'select', options: PROJECT_ROLES },
       { name: 'allocationPercent', label: 'Allocation', type: 'range', min: 0, max: 100, suffix: '%' },
-      { name: 'startDate', label: 'Start', type: 'date', half: true },
-      { name: 'endDate', label: 'End', type: 'date', half: true },
+      { name: 'startDate', label: 'Start', type: 'date', half: true, required: true },
+      { name: 'endDate', label: 'End', type: 'date', half: true, required: true },
     ],
   },
   ProjectTask: {
@@ -50,7 +53,7 @@ const FORMS = {
       { name: 'category', label: 'Category', type: 'select', options: TASK_CATEGORY_OPTIONS, half: true },
       { name: 'status', label: 'Status', type: 'select', options: TASK_STATUS_OPTIONS, half: true },
       { name: 'priority', label: 'Priority', type: 'select', options: TASK_PRIORITY_OPTIONS, half: true },
-      { name: 'assigneeId', label: 'Assignee', type: 'resource', half: true },
+      { name: 'assigneeId', label: 'Assignee', type: 'resource', half: true, allowEmpty: true },
       { name: 'startDate', label: 'Start', type: 'date', half: true },
       { name: 'dueDate', label: 'Due', type: 'date', half: true },
       { name: 'estimatedHours', label: 'Est. hours', type: 'number', min: 0, half: true },
@@ -86,11 +89,11 @@ const FORMS = {
   },
   SteeringMeeting: {
     label: 'meeting',
-    empty: { meetingType: MEETING_TYPES[0], meetingDate: '', attendees: '', agenda: '', decisions: '', actionItems: '' },
+    empty: { meetingDate: '', actualDate: '', attendees: '', agenda: '', decisions: '', actionItems: '' },
     numbers: [],
     fields: [
-      { name: 'meetingType', label: 'Type', type: 'select', options: MEETING_TYPES, half: true },
-      { name: 'meetingDate', label: 'Date', type: 'date', half: true },
+      { name: 'meetingDate', label: 'Plan date', type: 'date', half: true },
+      { name: 'actualDate', label: 'Actual date', type: 'date', half: true },
       { name: 'attendees', label: 'Attendees', type: 'textarea' },
       { name: 'agenda', label: 'Agenda', type: 'textarea' },
       { name: 'decisions', label: 'Decisions', type: 'textarea' },
@@ -119,10 +122,11 @@ const FORMS = {
 const iconBtnStyle = { display: 'inline-flex', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--muted-foreground)', padding: 4, borderRadius: 6 };
 
 export function ProjectDetail() {
+  const [busy, guard] = useSubmitGuard(); // blocks double-submit on save
   const { id } = useParams();
   const navigate = useNavigate();
-  const { data, create, update, remove } = useData();
-  const { canWrite, role, me, assignments } = useAuth();
+  const { data, create, update, remove, deleteProjectCascade, fetchFresh } = useData();
+  const { canWrite, role, me, email, assignments } = useAuth();
   // Management (create/edit/delete of project data) is granted per-project: to
   // Admins, or to whoever is a LEAD on THIS project (via their assignment role).
   // A non-lead member (e.g. Consultant) may only update their own tasks.
@@ -174,6 +178,7 @@ export function ProjectDetail() {
   function openCreate(entity, overrides = {}) {
     const empty = { ...FORMS[entity].empty, ...overrides };
     if (entity === 'ProjectAssignment' && !empty.resourceId) empty.resourceId = assignableByProduct[0]?.resourceId || '';
+    if (entity === 'ProjectAssignment' && !empty.startDate) empty.startDate = new Date().toISOString().slice(0, 10);
     setEditError(''); setPendingFiles([]);
     setEditEntity(entity);
     setEditForm(empty);
@@ -194,16 +199,40 @@ export function ProjectDetail() {
   function closeEdit() { setEditEntity(null); setEditForm(null); setEditSaving(false); setEditError(''); }
   async function saveEdit() {
     const cfg = FORMS[editEntity];
+    const missing = cfg.fields.filter((fl) => fl.required && !String(editForm[fl.name] ?? '').trim());
+    if (missing.length) { setEditError(`Please fill: ${missing.map((f) => f.label).join(', ')}`); return; }
+    if (editEntity === 'ProjectAssignment' && editForm.endDate < editForm.startDate) {
+      setEditError('End date cannot be before the start date.'); return;
+    }
+    if (editEntity === 'ProjectAssignment' && assignmentExceeds100(data.ProjectAssignment, editForm)) {
+      setEditError('This would put the resource over 100% utilization during the selected dates.'); return;
+    }
     const { _spId, ...rest } = editForm;
     const payload = { ...rest };
     cfg.numbers.forEach((n) => { payload[n] = Number(payload[n]) || 0; });
+    // Capture the pre-update assignee so we can email only on an actual change.
+    const origAssignee = editEntity === 'ProjectTask' && _spId
+      ? data.ProjectTask.find((t) => t._spId === _spId)?.assigneeId : undefined;
     setEditSaving(true);
     setEditError('');
     try {
+      // Concurrency re-check: block over-allocation against the latest data.
+      if (editEntity === 'ProjectAssignment') {
+        const fresh = await fetchFresh('ProjectAssignment');
+        if (assignmentExceeds100(fresh, editForm)) {
+          setEditError('This would put the resource over 100% utilization — another change was just made. Review the updated assignments.');
+          setEditSaving(false);
+          return;
+        }
+      }
       if (_spId) {
         await update(editEntity, _spId, payload);
+        if (editEntity === 'ProjectTask' && payload.assigneeId && payload.assigneeId !== origAssignee) {
+          emailAssignee(payload.assigneeId, payload);
+        }
       } else {
         const saved = await create(editEntity, { ...payload, projectId: id });
+        if (editEntity === 'ProjectTask' && payload.assigneeId) emailAssignee(payload.assigneeId, payload);
         // Upload files chosen while creating a task, now that the item exists.
         if (editEntity === 'ProjectTask' && saved?._spId && pendingFiles.length) {
           let failed = 0;
@@ -224,7 +253,30 @@ export function ProjectDetail() {
     }
   }
   function delRow(entity, spId) {
-    if (window.confirm('Delete this record?')) remove(entity, spId);
+    remove(entity, spId);
+  }
+
+  // Admin-only: delete the project and everything under it.
+  async function deleteProject() {
+    const childEntities = ['ProjectAssignment', 'ProjectTask', 'ProjectSkill', 'ProjectTracking', 'ProjectRisk', 'SteeringMeeting', 'ProjectPayment'];
+    const count = childEntities.reduce((n, e) => n + (data[e] || []).filter((r) => r.projectId === id).length, 0);
+    if (!window.confirm(`Delete "${name}" and its ${count} related record${count === 1 ? '' : 's'} (assignments, tasks, risks, meetings, payments, skills, tracking)?\n\nThis cannot be undone.`)) return;
+    try {
+      await deleteProjectCascade(id);
+      navigate('/projects');
+    } catch { /* error toast shown by the context */ }
+  }
+
+  // Assignment email for tasks created/reassigned from the project Tasks tab.
+  function emailAssignee(assigneeId, task) {
+    const r = data.Resource.find((x) => x.resourceId === assigneeId);
+    if (!r?.email) { toast(`No email on ${r?.fullName || 'the assignee'}'s record — notification not sent.`, 'error'); return; }
+    sendTaskAssignedEmail({
+      to: r.email, toName: r.fullName, taskTitle: task.Title,
+      projectName: name, assignedBy: me?.fullName || email || 'Someone',
+    })
+      .then(() => toast(`Assignment email sent to ${r.fullName}`))
+      .catch((e) => toast(`Email not sent: ${e.message}`, 'error'));
   }
 
   // ── Task attachments (SharePoint list-item attachments) ───────────────────
@@ -253,6 +305,7 @@ export function ProjectDetail() {
   }
   async function removeAttachment(fileName) {
     if (!editingTaskSpId) return;
+    if (!window.confirm(`Remove attachment "${fileName}"?`)) return;
     setAttachBusy(true);
     try {
       await deleteAttachment('ProjectTask', editingTaskSpId, fileName);
@@ -305,14 +358,19 @@ export function ProjectDetail() {
     if (!canEditRow) return null;
     return {
       key: '_actions', label: '', sortable: false, width: 80,
-      render: (r) => (
-        <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-          <button onClick={() => openEdit(entity, r)} aria-label="Edit" title="Edit" style={iconBtnStyle}><Pencil size={15} /></button>
-          {canManageProject && (
-            <button onClick={() => delRow(entity, r._spId)} aria-label="Delete" title="Delete" style={{ ...iconBtnStyle, color: 'var(--destructive)' }}><Trash2 size={15} /></button>
-          )}
-        </div>
-      ),
+      render: (r) => {
+        // Ended assignments are locked (no edit/delete).
+        const ended = entity === 'ProjectAssignment' && isExpired(r.endDate);
+        const lock = ended ? { opacity: 0.4, cursor: 'not-allowed' } : null;
+        return (
+          <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+            <button onClick={ended ? undefined : () => openEdit(entity, r)} disabled={ended} aria-label="Edit" title={ended ? 'Ended — locked' : 'Edit'} style={{ ...iconBtnStyle, ...lock }}><Pencil size={15} /></button>
+            {canManageProject && (
+              <button onClick={ended ? undefined : () => delRow(entity, r._spId)} disabled={ended} aria-label="Delete" title={ended ? 'Ended — locked' : 'Delete'} style={{ ...iconBtnStyle, color: 'var(--destructive)', ...lock }}><Trash2 size={15} /></button>
+            )}
+          </div>
+        );
+      },
     };
   };
 
@@ -366,6 +424,7 @@ export function ProjectDetail() {
         <div style={{ display: 'flex', gap: 8 }}>
           {canManageProject && <Button variant="outline" size="sm" onClick={openProjectEdit}><Pencil size={14} /> Edit project</Button>}
           <Button variant="outline" size="sm" onClick={() => navigate(`/report/${id}`)}>Summary Report</Button>
+          {role === 'Admin' && <Button variant="destructive" size="sm" onClick={deleteProject}><Trash2 size={14} /> Delete project</Button>}
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--muted-foreground)', marginBottom: '1rem', flexWrap: 'wrap' }}>
@@ -436,7 +495,7 @@ export function ProjectDetail() {
                   : <option value="">No parents yet</option>}
               </Select>
               <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-                {activeTaskParent && <Button variant="ghost" size="sm" onClick={() => openEdit('ProjectTask', activeTaskParent)}>{canManageProject ? 'Edit parent' : 'View parent'}</Button>}
+                {activeTaskParent && <Button variant="outline" size="sm" onClick={() => openEdit('ProjectTask', activeTaskParent)}>{canManageProject ? 'Edit parent' : 'View parent'}</Button>}
                 {canManageProject && <Button variant="outline" size="sm" onClick={() => openCreate('ProjectTask', { parentId: '' })}><Plus size={16} /> New parent</Button>}
                 {canManageProject && <Button size="sm" onClick={() => openCreate('ProjectTask', { parentId: activeTaskParentId })} disabled={!taskParents.length}><Plus size={16} /> New sub-task</Button>}
               </div>
@@ -481,7 +540,7 @@ export function ProjectDetail() {
           <div>
             {canManageProject && <TabToolbar onAdd={() => openCreate('SteeringMeeting')} label="Add meeting" />}
             <Table empty="No meetings."
-              columns={[{ key: 'meetingType', label: 'Type', render: (r) => r.meetingType || '—' }, { key: 'meetingDate', label: 'Date', render: (r) => fmtDate(r.meetingDate) }, { key: 'attendees', label: 'Attendees' }, { key: 'decisions', label: 'Decisions' }, actionsCol('SteeringMeeting')].filter(Boolean)}
+              columns={[{ key: 'meetingDate', label: 'Plan date', render: (r) => fmtDate(r.meetingDate) }, { key: 'actualDate', label: 'Actual date', render: (r) => fmtDate(r.actualDate) }, { key: 'attendees', label: 'Attendees' }, { key: 'decisions', label: 'Decisions' }, actionsCol('SteeringMeeting')].filter(Boolean)}
               rows={byProject('SteeringMeeting')} />
           </div>
         )}
@@ -499,7 +558,7 @@ export function ProjectDetail() {
       <Dialog open={projOpen} onClose={() => setProjOpen(false)} title="Edit project"
         footer={<>
           <Button variant="outline" onClick={() => setProjOpen(false)}>Cancel</Button>
-          <Button onClick={saveProject} disabled={projSaving}>{projSaving ? 'Saving…' : 'Save'}</Button>
+          <Button onClick={guard(saveProject)} disabled={projSaving || busy}>{projSaving ? 'Saving…' : 'Save'}</Button>
         </>}>
         {projForm && <>
           {projError && (
@@ -557,7 +616,7 @@ export function ProjectDetail() {
         title={`${editForm?._spId ? 'Edit' : 'Add'} ${editEntity === 'ProjectTask' ? (editForm?.parentId ? 'sub-task' : 'parent') : (editEntity ? FORMS[editEntity].label : '')}`}
         footer={<>
           <Button variant="outline" onClick={closeEdit}>Cancel</Button>
-          <Button onClick={saveEdit} disabled={editSaving}>{editSaving ? 'Saving…' : (editForm?._spId ? 'Save' : 'Add')}</Button>
+          <Button onClick={guard(saveEdit)} disabled={editSaving || busy}>{editSaving ? 'Saving…' : (editForm?._spId ? 'Save' : 'Add')}</Button>
         </>}>
         {editEntity && editForm && (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -568,9 +627,9 @@ export function ProjectDetail() {
             )}
             {FORMS[editEntity].fields.filter((fl) => !fl.showIf || fl.showIf(editForm)).map((fl) => (
               <div key={fl.name} style={{ gridColumn: fl.half ? 'span 1' : 'span 2' }}>
-                <Field label={fl.suffix ? `${fl.label} (${editForm[fl.name]}${fl.suffix})` : fl.label}>
+                <Field label={fl.suffix ? `${fl.label} (${editForm[fl.name]}${fl.suffix})` : fl.label} required={fl.required}>
                   <EditField field={fl} value={editForm[fl.name]}
-                    resources={editEntity === 'ProjectTask' ? assignedResources : (editEntity === 'ProjectAssignment' ? assignableByProduct : data.Resource)}
+                    resources={editEntity === 'ProjectAssignment' ? assignableByProduct : data.Resource}
                     parents={taskParents}
                     onChange={(v) => setEditForm((f) => ({ ...f, [fl.name]: v }))} />
                 </Field>
@@ -634,7 +693,7 @@ export function ProjectDetail() {
       <Dialog open={skillOpen} onClose={() => setSkillOpen(false)} title="Add required skill"
         footer={<>
           <Button variant="outline" onClick={() => setSkillOpen(false)}>Cancel</Button>
-          <Button onClick={saveSkill} disabled={skillSaving}>{skillSaving ? 'Adding…' : 'Add'}</Button>
+          <Button onClick={guard(saveSkill)} disabled={skillSaving || busy}>{skillSaving ? 'Adding…' : 'Add'}</Button>
         </>}>
         {skillForm && <>
           {skillError && (
@@ -671,7 +730,15 @@ function EditField({ field, value, onChange, resources, parents }) {
   const v = value ?? '';
   switch (field.type) {
     case 'resource':
-      return <Select value={v} onChange={(e) => onChange(e.target.value)}>{resources.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}</Select>;
+      // Fields that allow empty (e.g. task Assignee) get an explicit
+      // "Unassigned" option so an unset value is shown honestly rather than
+      // silently displaying the first person while the saved value stays blank.
+      return (
+        <Select value={v} onChange={(e) => onChange(e.target.value)}>
+          {field.allowEmpty && <option value="">Unassigned</option>}
+          {resources.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}
+        </Select>
+      );
     case 'taskParent':
       return <Select value={v} onChange={(e) => onChange(e.target.value)}>{(parents || []).map((p) => <option key={p._spId} value={p.taskId}>{p.Title || '(untitled parent)'}</option>)}</Select>;
     case 'select':

@@ -5,8 +5,10 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { Card, Button, Input, Select, Field, Skeleton } from '../components/ui/primitives.jsx';
 import { Dialog } from '../components/ui/Dialog.jsx';
 import { PageHeader } from '../components/Layout.jsx';
+import { useSubmitGuard } from '../lib/useSubmitGuard.js';
 
 export function ResourceSkills() {
+  const [busy, guard] = useSubmitGuard(); // blocks double-submit on save
   const { data, loading, create, remove } = useData();
   const { canWrite } = useAuth();
   const canEdit = canWrite('ResourceSkill');
@@ -140,7 +142,7 @@ export function ResourceSkills() {
       <Dialog open={open} onClose={() => !saving && setOpen(false)} title="Add skill to resource"
         footer={<>
           <Button variant="outline" onClick={() => setOpen(false)} disabled={saving}>Cancel</Button>
-          <Button onClick={save} disabled={saving}>{saving ? 'Adding…' : 'Add'}</Button>
+          <Button onClick={guard(save)} disabled={saving || busy}>{saving ? 'Adding…' : 'Add'}</Button>
         </>}>
         {form && <>
           {error && (

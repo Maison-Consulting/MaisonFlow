@@ -52,6 +52,25 @@ export function Dashboard() {
 
   const avgUtil = util.length ? Math.round(util.reduce((s, d) => s + d.value, 0) / util.length) : 0;
 
+  // Average utilization per department: each resource's today-active allocation,
+  // averaged across the resources in that department.
+  const deptUtil = useMemo(() => {
+    const byRes = {};
+    ProjectAssignment.forEach((a) => {
+      if (!isActiveOn(a.startDate, a.endDate)) return;
+      byRes[a.resourceId] = (byRes[a.resourceId] || 0) + Number(a.allocationPercent || 0);
+    });
+    const groups = {};
+    Resource.forEach((r) => {
+      const dept = r.department || 'Unassigned';
+      (groups[dept] = groups[dept] || []).push(byRes[r.resourceId] || 0);
+    });
+    return Object.entries(groups)
+      .map(([label, vals]) => ({ label, value: Math.round(vals.reduce((s, v) => s + v, 0) / vals.length) }))
+      .filter((d) => d.value > 0)
+      .sort((a, b) => b.value - a.value);
+  }, [Resource, ProjectAssignment]);
+
   const ragDist = useMemo(() => {
     // latest tracking per project, fallback to Project.ragStatus
     const latest = {};
@@ -115,6 +134,10 @@ export function Dashboard() {
         <Card>
           <CardHeader><strong>Resource Utilization</strong></CardHeader>
           <CardContent>{anyLoading ? <Skeleton height={200} /> : util.length ? <BarChart data={util} /> : <Empty />}</CardContent>
+        </Card>
+        <Card>
+          <CardHeader><strong>Utilization by Department</strong> <span style={{ color: 'var(--muted-foreground)', fontSize: '0.8rem' }}>(avg, today)</span></CardHeader>
+          <CardContent>{anyLoading ? <Skeleton height={200} /> : deptUtil.length ? <BarChart data={deptUtil} /> : <Empty />}</CardContent>
         </Card>
         <Card>
           <CardHeader><strong>Project RAG Distribution</strong></CardHeader>

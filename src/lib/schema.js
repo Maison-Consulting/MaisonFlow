@@ -27,9 +27,6 @@ const DATE = 'date';
 // comma-separated string in the single `product` text column.
 export const PRODUCTS = ['F&O', 'BC', 'Retail', 'Power Platform', 'Other'];
 
-// Meeting types for the project Meetings section.
-export const MEETING_TYPES = ['Steering Meeting', 'Project Status Update Meeting', 'Master Data Readiness Meeting', 'Internal Meetings'];
-
 // Parse a stored product value ("F&O, BC") into a clean array.
 export function parseProducts(v) {
   return String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -178,8 +175,8 @@ export const SCHEMA = [
     columns: [
       { name: 'meetingId', kind: T },
       { name: 'projectId', kind: T },
-      { name: 'meetingType', kind: T }, // Steering | Project Status Update | Master Data Readiness | Internal
-      { name: 'meetingDate', kind: DATE },
+      { name: 'meetingDate', kind: DATE },  // planned date
+      { name: 'actualDate', kind: DATE },   // actual date the meeting happened
       { name: 'attendees', kind: NOTE },
       { name: 'agenda', kind: NOTE },
       { name: 'decisions', kind: NOTE },
@@ -199,6 +196,16 @@ export const SCHEMA = [
       { name: 'invoiceDate', kind: DATE }, // date the invoice was issued (shown when status is Invoiced/Paid)
       { name: 'paymentDate', kind: DATE }, // date payment was received (shown when status is Paid/Partial)
       { name: 'status', kind: T },
+    ],
+  },
+  {
+    // App-wide settings as key → JSON. Holds the timesheet integration config
+    // (source site/list, column mapping, project/activity/people mappings).
+    name: 'AppSetting',
+    columns: [
+      { name: 'settingId', kind: T },
+      { name: 'settingKey', kind: T },
+      { name: 'value', kind: NOTE },
     ],
   },
 ];

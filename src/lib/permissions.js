@@ -35,7 +35,7 @@ export function effectiveRole(appRole, assignmentRoles = []) {
 // Module keys mirror route path slugs ('' route → 'dashboard').
 export const MODULES = [
   'dashboard', 'resources', 'skills', 'resource-skills', 'projects', 'project-skills',
-  'assignments', 'tasks', 'tracking', 'risks', 'meetings', 'payments',
+  'assignments', 'allocations', 'timesheets', 'tasks', 'tracking', 'risks', 'meetings', 'payments',
   'smart-suggest', 'report', 'import',
 ];
 
@@ -59,7 +59,7 @@ const ROLE_CONFIG = {
   Admin: { view: MODULES, write: MODULES },
 
   'Project Manager': {
-    view: ['dashboard', 'resource-skills', 'projects', 'project-skills', 'assignments', 'tasks', 'tracking', 'risks', 'meetings', 'payments', 'smart-suggest', 'report'],
+    view: ['dashboard', 'resource-skills', 'projects', 'project-skills', 'assignments', 'allocations', 'timesheets', 'tasks', 'tracking', 'risks', 'meetings', 'payments', 'smart-suggest', 'report'],
     write: ['resource-skills', 'projects', 'project-skills', 'assignments', 'tasks', 'tracking', 'risks', 'meetings', 'payments'],
   },
 
@@ -78,7 +78,7 @@ const ROLE_CONFIG = {
   // assigned to him — but nothing project-level. Data scoping limits both his
   // visible projects and his writable tasks to his own.
   Consultant: {
-    view: ['projects', 'resource-skills', 'assignments', 'tasks'],
+    view: ['projects', 'resource-skills', 'assignments', 'tasks', 'timesheets'],
     write: ['tasks'],
   },
 

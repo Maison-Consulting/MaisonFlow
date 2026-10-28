@@ -2,7 +2,7 @@ import React from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Target, Link2, FolderKanban, Puzzle, Pin,
-  TrendingUp, AlertTriangle, Armchair, Wallet, Sparkles, FileText, Upload, Home, Trello,
+  TrendingUp, AlertTriangle, Armchair, Wallet, Sparkles, FileText, Upload, Home, Trello, Clock,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { moduleForPath } from '../lib/permissions.js';
@@ -23,6 +23,8 @@ const SECTIONS = [
       { to: '/projects', label: 'Projects', icon: FolderKanban },
       { to: '/project-skills', label: 'Project Skills', icon: Puzzle },
       { to: '/assignments', label: 'Assignments', icon: Pin },
+      { to: '/allocations', label: 'Resource Allocation', icon: TrendingUp },
+      { to: '/timesheets', label: 'Timesheets', icon: Clock },
       { to: '/tasks', label: 'Task Board', icon: Trello },
     ],
   },
@@ -30,7 +32,7 @@ const SECTIONS = [
     label: 'Governance',
     items: [
       { to: '/risks', label: 'Risks', icon: AlertTriangle },
-      { to: '/meetings', label: 'Meetings', icon: Armchair },
+      { to: '/meetings', label: 'Steering Meetings', icon: Armchair },
       { to: '/payments', label: 'Payments', icon: Wallet },
     ],
   },

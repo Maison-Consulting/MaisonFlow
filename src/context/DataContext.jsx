@@ -103,9 +103,11 @@ export function DataProvider({ children }) {
     }
   }, [toast, authorize, rawData]);
 
-  // Optimistic delete.
-  const remove = useCallback(async (entity, spId) => {
+  // Optimistic delete. Confirms first (app-wide delete warning) unless the
+  // caller already ran its own confirmation and passes { confirm: false }.
+  const remove = useCallback(async (entity, spId, opts = {}) => {
     guardOrThrow(authorize(entity, 'delete', rawData[entity]?.find((r) => r._spId === spId)));
+    if (opts.confirm !== false && !window.confirm('Are you sure you want to delete this? This action cannot be undone.')) return;
     let removed, idx;
     setData((d) => {
       idx = d[entity].findIndex((r) => r._spId === spId);
@@ -126,6 +128,43 @@ export function DataProvider({ children }) {
     }
   }, [toast, authorize, rawData]);
 
-  const value = { data, loading, initialLoading, fatalError, reload, create, update, remove };
+  // Admin-only cascade delete: remove a project and ALL of its child records
+  // (assignments, tasks, risks, meetings, payments, skills, tracking) so nothing
+  // is orphaned. Confirmation is the caller's responsibility.
+  const deleteProjectCascade = useCallback(async (projectId) => {
+    if (auth.role !== 'Admin') { toast('Only an admin can delete a project.', 'error'); throw new Error('forbidden'); }
+    const project = rawData.Project.find((p) => p.projectId === projectId);
+    if (!project) return;
+    const jobs = [];
+    PROJECT_CHILD.forEach((e) => {
+      (rawData[e] || []).filter((r) => r.projectId === projectId).forEach((r) => jobs.push([e, r._spId]));
+    });
+    try {
+      for (const [e, spId] of jobs) await allServices[e].remove(spId);
+      await allServices.Project.remove(project._spId);
+      setData((d) => {
+        const next = { ...d };
+        PROJECT_CHILD.forEach((e) => { next[e] = (d[e] || []).filter((r) => r.projectId !== projectId); });
+        next.Project = d.Project.filter((p) => p.projectId !== projectId);
+        return next;
+      });
+      toast(`Project deleted${jobs.length ? ` (${jobs.length} related record${jobs.length === 1 ? '' : 's'} removed)` : ''}`);
+    } catch (err) {
+      toast(`Couldn't delete project: ${err.message}`, 'error');
+      reload(); // some deletes may have gone through — resync from SharePoint
+      throw err;
+    }
+  }, [auth, rawData, toast, reload]);
+
+  // Fetch one entity's list fresh from SharePoint, update state, and return the
+  // raw rows — used for last-moment concurrency re-checks (e.g. over-allocation)
+  // so a second user can't slip past a stale client-side validation.
+  const fetchFresh = useCallback(async (entity) => {
+    const rows = await allServices[entity].list();
+    setData((d) => ({ ...d, [entity]: rows }));
+    return rows;
+  }, []);
+
+  const value = { data, loading, initialLoading, fatalError, reload, create, update, remove, deleteProjectCascade, fetchFresh };
   return <DataCtx.Provider value={value}>{children}</DataCtx.Provider>;
 }

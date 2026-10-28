@@ -87,6 +87,7 @@ export async function graphFetch(path, options = {}) {
   const url = path.startsWith('http') ? path : `${GRAPH_BASE}${path}`;
   const res = await fetch(url, {
     ...options,
+    cache: 'no-store', // always hit SharePoint, never a stale cached response
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',

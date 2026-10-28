@@ -4,6 +4,7 @@ import { useData } from '../context/DataContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { Card, Button, Input, Select, Textarea, Field, Skeleton } from '../components/ui/primitives.jsx';
 import { Dialog } from '../components/ui/Dialog.jsx';
+import { useSubmitGuard } from '../lib/useSubmitGuard.js';
 
 const CATEGORIES = ['Development', 'Functional', 'PM', 'Soft Skills', 'Infra'];
 const EMPTY = { name: '', category: 'Development', description: '' };
@@ -30,6 +31,7 @@ const FALLBACK = [
 const catColor = (cat, i) => CAT_COLORS[cat] || FALLBACK[i % FALLBACK.length];
 
 export function Skills() {
+  const [busy, guard] = useSubmitGuard(); // blocks double-submit on save
   const { data, loading, create, update, remove } = useData();
   const { canWrite } = useAuth();
   const canEdit = canWrite('Skill');
@@ -63,8 +65,13 @@ export function Skills() {
     return data.ResourceSkill.some((r) => r.skillId === skillId) || data.ProjectSkill.some((r) => r.skillId === skillId);
   }
   async function del(row) {
-    if (isReferenced(row.skillId) && !window.confirm('This skill is referenced by resources or projects. Delete anyway?')) return;
-    await remove('Skill', row._spId);
+    if (isReferenced(row.skillId)) {
+      // In-use skills get a more specific warning; skip the generic one.
+      if (!window.confirm('This skill is referenced by resources or projects. Delete anyway?')) return;
+      await remove('Skill', row._spId, { confirm: false });
+    } else {
+      await remove('Skill', row._spId); // generic confirm from DataContext
+    }
     setOpen(false);
   }
 
@@ -156,7 +163,7 @@ export function Skills() {
         footer={<>
           {editing?._spId && <Button variant="destructive" onClick={() => del(editing)} style={{ marginRight: 'auto' }}>Delete</Button>}
           <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={save}>{editing?._spId ? 'Save changes' : 'Add'}</Button>
+          <Button onClick={guard(save)} disabled={busy}>{busy ? 'Saving…' : editing?._spId ? 'Save changes' : 'Add'}</Button>
         </>}>
         <Field label="Name" required><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
         <Field label="Type">

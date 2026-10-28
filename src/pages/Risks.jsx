@@ -7,10 +7,12 @@ import { PageHeader } from '../components/Layout.jsx';
 import { SeverityPill } from '../components/pills.jsx';
 import { Heatmap } from '../components/charts/Charts.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useSubmitGuard } from '../lib/useSubmitGuard.js';
 
 const iconBtnStyle = { display: 'inline-flex', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--muted-foreground)', padding: 4, borderRadius: 6 };
 
 export function Risks() {
+  const [busy, guard] = useSubmitGuard(); // blocks double-submit on save
   const { data, loading, create, update, remove } = useData();
   const { canWrite } = useAuth();
   const canEdit = canWrite('ProjectRisk');
@@ -48,7 +50,7 @@ export function Risks() {
     setOpen(false);
   }
   function del(r) {
-    if (window.confirm('Delete this risk?')) remove('ProjectRisk', r._spId);
+    remove('ProjectRisk', r._spId);
   }
 
   return (
@@ -85,7 +87,7 @@ export function Risks() {
       </div>
 
       <Dialog open={open} onClose={() => setOpen(false)} title={form?._spId ? 'Edit risk' : 'New risk'}
-        footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save}>{form?._spId ? 'Save' : 'Add risk'}</Button></>}>
+        footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={guard(save)} disabled={busy}>{busy ? 'Saving…' : form?._spId ? 'Save' : 'Add risk'}</Button></>}>
         {form && <>
           <Field label="Title"><Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></Field>
           <Field label="Description"><Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>

@@ -5,8 +5,10 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { Card, Button, Input, Select, Field, Skeleton } from '../components/ui/primitives.jsx';
 import { Dialog } from '../components/ui/Dialog.jsx';
 import { PageHeader } from '../components/Layout.jsx';
+import { useSubmitGuard } from '../lib/useSubmitGuard.js';
 
 export function ProjectSkills() {
+  const [busy, guard] = useSubmitGuard(); // blocks double-submit on save
   const { data, loading, create, remove } = useData();
   const { canWrite, canManageProject } = useAuth();
   const canEdit = canWrite('ProjectSkill');
@@ -139,7 +141,7 @@ export function ProjectSkills() {
       <Dialog open={open} onClose={() => setOpen(false)} title="Add Skill to Project"
         footer={<>
           <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={save} disabled={saving}>{saving ? 'Adding…' : 'Add'}</Button>
+          <Button onClick={guard(save)} disabled={saving || busy}>{saving ? 'Adding…' : 'Add'}</Button>
         </>}>
         {form && <>
           {error && (

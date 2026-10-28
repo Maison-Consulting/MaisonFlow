@@ -7,10 +7,12 @@ import { PageHeader } from '../components/Layout.jsx';
 import { RagBadge, fmtDate, nextSunday } from '../components/pills.jsx';
 import { LineChart } from '../components/charts/Charts.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useSubmitGuard } from '../lib/useSubmitGuard.js';
 
 const iconBtnStyle = { display: 'inline-flex', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--muted-foreground)', padding: 4, borderRadius: 6 };
 
 export function Tracking() {
+  const [busy, guard] = useSubmitGuard(); // blocks double-submit on save
   const { data, loading, create, update, remove } = useData();
   const { canWrite } = useAuth();
   const canEdit = canWrite('ProjectTracking');
@@ -50,7 +52,7 @@ export function Tracking() {
     setOpen(false);
   }
   function del(r) {
-    if (window.confirm('Delete this tracking entry?')) remove('ProjectTracking', r._spId);
+    remove('ProjectTracking', r._spId);
   }
 
   return (
@@ -89,7 +91,7 @@ export function Tracking() {
       )}
 
       <Dialog open={open} onClose={() => setOpen(false)} title={form?._spId ? 'Edit tracking entry' : 'Log week'}
-        footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save}>{form?._spId ? 'Save' : 'Save entry'}</Button></>}>
+        footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={guard(save)} disabled={busy}>{busy ? 'Saving…' : form?._spId ? 'Save' : 'Save entry'}</Button></>}>
         {form && <>
           <Field label="Week ending"><Input type="date" value={form.weekEnding} onChange={(e) => setForm({ ...form, weekEnding: e.target.value })} /></Field>
           <Field label="% Complete"><Input type="number" min={0} max={100} value={form.percentComplete} onChange={(e) => setForm({ ...form, percentComplete: e.target.value })} /></Field>

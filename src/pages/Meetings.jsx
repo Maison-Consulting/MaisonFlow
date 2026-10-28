@@ -5,14 +5,15 @@ import { Card, CardContent, Button, Input, Select, Textarea, Field, Skeleton } f
 import { Dialog } from '../components/ui/Dialog.jsx';
 import { PageHeader } from '../components/Layout.jsx';
 import { fmtDate } from '../components/pills.jsx';
-import { MEETING_TYPES } from '../lib/schema.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useSubmitGuard } from '../lib/useSubmitGuard.js';
 
 function monthKey(d) { const dt = new Date(d); return isNaN(dt) ? 'Undated' : dt.toLocaleString('en', { month: 'long', year: 'numeric' }); }
 
 const iconBtnStyle = { display: 'inline-flex', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--muted-foreground)', padding: 4, borderRadius: 6 };
 
 export function Meetings() {
+  const [busy, guard] = useSubmitGuard(); // blocks double-submit on save
   const { data, loading, create, update, remove } = useData();
   const { canWrite } = useAuth();
   const canEdit = canWrite('SteeringMeeting');
@@ -26,11 +27,11 @@ export function Meetings() {
     return map;
   }, [data.SteeringMeeting]);
 
-  function openNew() { setForm({ projectId: data.Project[0]?.projectId || '', meetingType: MEETING_TYPES[0], meetingDate: '', attendees: '', agenda: '', decisions: '', actionItems: '' }); setOpen(true); }
+  function openNew() { setForm({ projectId: data.Project[0]?.projectId || '', meetingDate: '', actualDate: '', attendees: '', agenda: '', decisions: '', actionItems: '' }); setOpen(true); }
   function openEdit(m) {
     setForm({
-      _spId: m._spId, projectId: m.projectId, meetingType: m.meetingType || MEETING_TYPES[0],
-      meetingDate: (m.meetingDate || '').slice(0, 10), attendees: m.attendees || '',
+      _spId: m._spId, projectId: m.projectId,
+      meetingDate: (m.meetingDate || '').slice(0, 10), actualDate: (m.actualDate || '').slice(0, 10), attendees: m.attendees || '',
       agenda: m.agenda || '', decisions: m.decisions || '', actionItems: m.actionItems || '',
     });
     setOpen(true);
@@ -42,14 +43,14 @@ export function Meetings() {
     setOpen(false);
   }
   function del(m) {
-    if (window.confirm('Delete this meeting?')) remove('SteeringMeeting', m._spId);
+    remove('SteeringMeeting', m._spId);
   }
 
   const projName = (id) => { const p = data.Project.find((x) => x.projectId === id); return p?.projectName || p?.name || id; };
 
   return (
     <div>
-      <PageHeader title="Meetings">{canEdit && <Button onClick={openNew}><Plus size={16} /> Add</Button>}</PageHeader>
+      <PageHeader title="Steering Meetings">{canEdit && <Button onClick={openNew}><Plus size={16} /> Add</Button>}</PageHeader>
 
       {loading.SteeringMeeting ? <Card style={{ padding: '1.25rem' }}><Skeleton height={120} /></Card>
         : Object.keys(grouped).length === 0 ? <Card><CardContent><div style={{ padding: '2rem', textAlign: 'center', color: 'var(--muted-foreground)' }}>No meetings yet.</div></CardContent></Card>
@@ -61,7 +62,7 @@ export function Meetings() {
                 <Card key={m._spId}>
                   <CardContent>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <strong>{m.meetingType ? `${m.meetingType} · ` : ''}{fmtDate(m.meetingDate)} — {projName(m.projectId)}</strong>
+                      <strong>{projName(m.projectId)} — Plan {fmtDate(m.meetingDate)}{m.actualDate ? ` · Actual ${fmtDate(m.actualDate)}` : ''}</strong>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span style={{ fontSize: '0.8rem', color: 'var(--muted-foreground)' }}>{(m.attendees || '').split(',').filter(Boolean).length} attendees</span>
                         {canEdit && <button onClick={() => openEdit(m)} aria-label="Edit" title="Edit" style={iconBtnStyle}><Pencil size={15} /></button>}
@@ -79,11 +80,13 @@ export function Meetings() {
         ))}
 
       <Dialog open={open} onClose={() => setOpen(false)} title={form?._spId ? 'Edit meeting' : 'Add meeting'}
-        footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save}>{form?._spId ? 'Save' : 'Add'}</Button></>}>
+        footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={guard(save)} disabled={busy}>{busy ? 'Saving…' : form?._spId ? 'Save' : 'Add'}</Button></>}>
         {form && <>
           <Field label="Project"><Select value={form.projectId} onChange={(e) => setForm({ ...form, projectId: e.target.value })}>{data.Project.map((p) => <option key={p._spId} value={p.projectId}>{p.projectName || p.name}</option>)}</Select></Field>
-          <Field label="Meeting type"><Select value={form.meetingType} onChange={(e) => setForm({ ...form, meetingType: e.target.value })}>{MEETING_TYPES.map((t) => <option key={t}>{t}</option>)}</Select></Field>
-          <Field label="Meeting date"><Input type="date" value={form.meetingDate} onChange={(e) => setForm({ ...form, meetingDate: e.target.value })} /></Field>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <Field label="Plan date"><Input type="date" value={form.meetingDate} onChange={(e) => setForm({ ...form, meetingDate: e.target.value })} /></Field>
+            <Field label="Actual date"><Input type="date" value={form.actualDate} onChange={(e) => setForm({ ...form, actualDate: e.target.value })} /></Field>
+          </div>
           <Field label="Attendees (comma-separated)"><Input value={form.attendees} onChange={(e) => setForm({ ...form, attendees: e.target.value })} /></Field>
           <Field label="Agenda"><Textarea value={form.agenda} onChange={(e) => setForm({ ...form, agenda: e.target.value })} /></Field>
           <Field label="Decisions"><Textarea value={form.decisions} onChange={(e) => setForm({ ...form, decisions: e.target.value })} /></Field>

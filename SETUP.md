@@ -68,7 +68,26 @@ Resource **Access role** is one of **Admin / Viewer / User**:
 Set a person's Access role on their **Resource** record. Everyone else stays **User**
 and is granted access per-project via **Assignments** (Role on project).
 
-## 4. Deploy
+## 4. Timesheet integration
+
+The **Timesheets** screen reads the existing timesheet list on its own site (same
+tenant). No extra Azure permission is needed (`Sites.ReadWrite.All` covers it), but
+each user only sees the timesheet entries their SharePoint account can read.
+
+1. Create the **AppSetting** list (click **Provision lists**, or create it manually
+   with text columns `settingId`, `settingKey` and a multi-line text column `value`).
+2. As an Admin, open **Timesheets → Setup**: paste the timesheet site URL, pick the
+   list, and check the guessed column mapping (Employee, Date, Project, Activity,
+   Type, Status, On/Off client site hours).
+3. Map each timesheet project to a Maison Flow project (or **Ignore** it), optionally
+   map activities to tasks, and fix any people who didn't match by email/name.
+
+Metrics: **Utilization** = logged ÷ capacity (working days × daily hours, from the
+resource's Weekly capacity or the default). **Plan adherence** = hours logged on
+assigned projects ÷ hours planned from allocation %. Rejected and draft entries are
+never counted.
+
+## 5. Deploy
 
 ```bash
 npm install

@@ -17,6 +17,8 @@ import { Projects } from './pages/Projects.jsx';
 import { ProjectDetail } from './pages/ProjectDetail.jsx';
 import { ProjectSkills } from './pages/ProjectSkills.jsx';
 import { Assignments } from './pages/Assignments.jsx';
+import { Allocations } from './pages/Allocations.jsx';
+import { Timesheets } from './pages/Timesheets.jsx';
 import { Tracking } from './pages/Tracking.jsx';
 import { Tasks } from './pages/Tasks.jsx';
 import { Risks } from './pages/Risks.jsx';
@@ -80,6 +82,8 @@ function AppShell() {
           <Route path="/projects/:id" element={<ProjectDetail />} />
           <Route path="/project-skills" element={<ProjectSkills />} />
           <Route path="/assignments" element={<Assignments />} />
+          <Route path="/allocations" element={<Allocations />} />
+          <Route path="/timesheets" element={<Timesheets />} />
           <Route path="/tracking" element={<Tracking />} />
           <Route path="/tasks" element={<Tasks />} />
           <Route path="/risks" element={<Risks />} />

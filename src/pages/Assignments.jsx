@@ -7,18 +7,14 @@ import { PageHeader } from '../components/Layout.jsx';
 import { fmtDate, isExpired, isActiveOn } from '../components/pills.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { PROJECT_ROLES } from '../lib/permissions.js';
-
-// Overlap check for two date ranges.
-function overlaps(aStart, aEnd, bStart, bEnd) {
-  const as = new Date(aStart || '1900-01-01'), ae = new Date(aEnd || '2999-01-01');
-  const bs = new Date(bStart || '1900-01-01'), be = new Date(bEnd || '2999-01-01');
-  return as <= be && bs <= ae;
-}
+import { assignmentExceeds100 } from '../lib/allocation.js';
+import { useSubmitGuard } from '../lib/useSubmitGuard.js';
 
 const iconBtnStyle = { display: 'inline-flex', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--muted-foreground)', padding: 4, borderRadius: 6 };
 
 export function Assignments() {
-  const { data, loading, create, update, remove } = useData();
+  const [busy, guard] = useSubmitGuard(); // blocks double-submit on save
+  const { data, loading, create, update, remove, fetchFresh } = useData();
   const { canWrite, canManageProject } = useAuth();
   const canEdit = canWrite('ProjectAssignment');
   // Assignments can only be managed on projects the user leads (or as Admin).
@@ -26,32 +22,34 @@ export function Assignments() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [deptFilter, setDeptFilter] = useState(''); // form: filter resource picker by department
   const [fProject, setFProject] = useState('');
   const [fResource, setFResource] = useState('');
   const [fStatus, setFStatus] = useState(''); // '', 'Active', 'Upcoming', 'Ended'
+  const [fDept, setFDept] = useState('');
 
   const projName = (id) => { const p = data.Project.find((x) => x.projectId === id); return p?.projectName || p?.name || id; };
   const resName = (id) => data.Resource.find((r) => r.resourceId === id)?.fullName || id;
+  // Department filter for the form's resource picker.
+  const departments = [...new Set(data.Resource.map((r) => r.department).filter(Boolean))].sort();
+  const formResources = deptFilter ? data.Resource.filter((r) => r.department === deptFilter) : data.Resource;
 
-  // Resources whose overlapping allocations exceed 100% (spec §6.7).
-  // Expired assignments (end date passed) no longer consume capacity, so we
-  // drop them before checking overlaps.
+  // Resources over-allocated AS OF TODAY: sum the allocation of assignments
+  // that are live today (start ≤ today ≤ end). Expired and not-yet-started
+  // assignments don't consume capacity, so they're excluded.
   const overAllocated = useMemo(() => {
-    const flag = new Set();
-    const live = data.ProjectAssignment.filter((x) => !isExpired(x.endDate));
-    data.Resource.forEach((res) => {
-      const a = live.filter((x) => x.resourceId === res.resourceId);
-      a.forEach((x) => {
-        const sum = a.filter((y) => overlaps(x.startDate, x.endDate, y.startDate, y.endDate))
-          .reduce((s, y) => s + Number(y.allocationPercent || 0), 0);
-        if (sum > 100) flag.add(res.resourceId);
-      });
+    const byRes = {};
+    data.ProjectAssignment.forEach((a) => {
+      if (!isActiveOn(a.startDate, a.endDate)) return;
+      byRes[a.resourceId] = (byRes[a.resourceId] || 0) + Number(a.allocationPercent || 0);
     });
-    return flag;
-  }, [data.ProjectAssignment, data.Resource]);
+    return new Set(Object.keys(byRes).filter((rid) => byRes[rid] > 100));
+  }, [data.ProjectAssignment]);
 
-  function openNew() { setForm({ projectId: manageableProjects[0]?.projectId || '', resourceId: data.Resource[0]?.resourceId || '', allocationPercent: 50, startDate: '', endDate: '', role: 'Consultant' }); setOpen(true); }
+  function openNew() { setError(''); setDeptFilter(''); setForm({ projectId: manageableProjects[0]?.projectId || '', resourceId: data.Resource[0]?.resourceId || '', allocationPercent: 50, startDate: new Date().toISOString().slice(0, 10), endDate: '', role: 'Consultant' }); setOpen(true); }
   function openEdit(r) {
+    setError(''); setDeptFilter('');
     setForm({
       _spId: r._spId,
       projectId: r.projectId || '',
@@ -64,8 +62,23 @@ export function Assignments() {
     setOpen(true);
   }
   async function save() {
+    if (!form.startDate || !form.endDate) { setError('Start date and end date are required.'); return; }
+    if (form.endDate < form.startDate) { setError('End date cannot be before the start date.'); return; }
+    if (assignmentExceeds100(data.ProjectAssignment, form)) {
+      setError('This would put the resource over 100% utilization during the selected dates.');
+      return;
+    }
+    setError('');
     setSaving(true);
     try {
+      // Re-check against the LATEST assignments so a second user can't over-
+      // allocate the same resource concurrently on stale data.
+      const fresh = await fetchFresh('ProjectAssignment');
+      if (assignmentExceeds100(fresh, form)) {
+        setError('This would put the resource over 100% utilization — another change was just made. Review the updated assignments.');
+        setSaving(false);
+        return;
+      }
       const { _spId, ...rest } = form;
       const payload = { ...rest, allocationPercent: Number(form.allocationPercent) || 0 };
       if (_spId) await update('ProjectAssignment', _spId, payload);
@@ -76,7 +89,7 @@ export function Assignments() {
     }
   }
   function del(r) {
-    if (window.confirm('Delete this assignment?')) remove('ProjectAssignment', r._spId);
+    remove('ProjectAssignment', r._spId);
   }
 
   function statusOf(r) {
@@ -84,11 +97,13 @@ export function Assignments() {
     return isActiveOn(r.startDate, r.endDate) ? 'Active' : 'Upcoming';
   }
 
+  const deptOf = (rid) => data.Resource.find((x) => x.resourceId === rid)?.department || '';
   const rows = useMemo(() => data.ProjectAssignment.filter((r) =>
     (!fProject || r.projectId === fProject) &&
     (!fResource || r.resourceId === fResource) &&
-    (!fStatus || statusOf(r) === fStatus)
-  ), [data.ProjectAssignment, fProject, fResource, fStatus]);
+    (!fStatus || statusOf(r) === fStatus) &&
+    (!fDept || deptOf(r.resourceId) === fDept)
+  ), [data.ProjectAssignment, data.Resource, fProject, fResource, fStatus, fDept]);
 
   return (
     <div>
@@ -115,8 +130,12 @@ export function Assignments() {
           <option value="Upcoming">Upcoming</option>
           <option value="Ended">Ended</option>
         </Select>
-        {(fProject || fResource || fStatus) && (
-          <Button variant="ghost" size="sm" onClick={() => { setFProject(''); setFResource(''); setFStatus(''); }}>Clear</Button>
+        <Select value={fDept} onChange={(e) => setFDept(e.target.value)} style={{ width: 'auto' }}>
+          <option value="">All departments</option>
+          {departments.map((d) => <option key={d}>{d}</option>)}
+        </Select>
+        {(fProject || fResource || fStatus || fDept) && (
+          <Button variant="ghost" size="sm" onClick={() => { setFProject(''); setFResource(''); setFStatus(''); setFDept(''); }}>Clear</Button>
         )}
         <span style={{ marginLeft: 'auto', alignSelf: 'center', color: 'var(--muted-foreground)', fontSize: '0.8rem' }}>
           {rows.length} of {data.ProjectAssignment.length}
@@ -139,27 +158,45 @@ export function Assignments() {
                     {!isActiveOn(r.startDate, r.endDate) && !isExpired(r.endDate) && <Badge color="var(--accent)">Upcoming</Badge>}
                   </span>
                 ) },
-                ...(canEdit ? [{ key: '_actions', label: '', sortable: false, width: 80, render: (r) => (
-                  canManageProject(r.projectId) ? (
+                ...(canEdit ? [{ key: '_actions', label: '', sortable: false, width: 80, render: (r) => {
+                  if (!canManageProject(r.projectId)) return null;
+                  const ended = isExpired(r.endDate); // ended assignments are locked
+                  const lock = ended ? { opacity: 0.4, cursor: 'not-allowed' } : null;
+                  return (
                     <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-                      <button onClick={() => openEdit(r)} aria-label="Edit" title="Edit" style={iconBtnStyle}><Pencil size={15} /></button>
-                      <button onClick={() => del(r)} aria-label="Delete" title="Delete" style={{ ...iconBtnStyle, color: 'var(--destructive)' }}><Trash2 size={15} /></button>
+                      <button onClick={ended ? undefined : () => openEdit(r)} disabled={ended} aria-label="Edit" title={ended ? 'Ended — locked' : 'Edit'} style={{ ...iconBtnStyle, ...lock }}><Pencil size={15} /></button>
+                      <button onClick={ended ? undefined : () => del(r)} disabled={ended} aria-label="Delete" title={ended ? 'Ended — locked' : 'Delete'} style={{ ...iconBtnStyle, color: 'var(--destructive)', ...lock }}><Trash2 size={15} /></button>
                     </div>
-                  ) : null
-                ) }] : []),
+                  );
+                } }] : []),
               ]} rows={rows} />}
       </Card>
 
       <Dialog open={open} onClose={() => setOpen(false)} title={form?._spId ? 'Edit assignment' : 'Add assignment'}
-        footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save} disabled={saving}>{saving ? 'Saving…' : (form?._spId ? 'Save' : 'Add')}</Button></>}>
+        footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={guard(save)} disabled={saving || busy}>{saving || busy ? 'Saving…' : (form?._spId ? 'Save' : 'Add')}</Button></>}>
         {form && <>
+          {error && (
+            <div style={{ marginBottom: '0.85rem', padding: '0.6rem 0.8rem', borderRadius: 'var(--radius)', background: 'oklch(0.60 0.22 25 / 0.1)', border: '1px solid var(--destructive)', color: 'var(--foreground)', fontSize: '0.82rem' }}>
+              {error}
+            </div>
+          )}
           <Field label="Project"><Select value={form.projectId} onChange={(e) => setForm({ ...form, projectId: e.target.value })}>{manageableProjects.map((p) => <option key={p._spId} value={p.projectId}>{p.projectName || p.name}</option>)}</Select></Field>
-          <Field label="Resource"><Select value={form.resourceId} onChange={(e) => setForm({ ...form, resourceId: e.target.value })}>{data.Resource.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}</Select></Field>
+          <Field label="Department (filter)">
+            <Select value={deptFilter} onChange={(e) => {
+              const d = e.target.value; setDeptFilter(d);
+              const pool = d ? data.Resource.filter((r) => r.department === d) : data.Resource;
+              if (!pool.some((r) => r.resourceId === form.resourceId)) setForm((f) => ({ ...f, resourceId: pool[0]?.resourceId || '' }));
+            }}>
+              <option value="">All departments</option>
+              {departments.map((d) => <option key={d}>{d}</option>)}
+            </Select>
+          </Field>
+          <Field label="Resource"><Select value={form.resourceId} onChange={(e) => setForm({ ...form, resourceId: e.target.value })}>{formResources.map((r) => <option key={r._spId} value={r.resourceId}>{r.fullName}</option>)}</Select></Field>
           <Field label="Role on project"><Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>{PROJECT_ROLES.map((r) => <option key={r}>{r}</option>)}</Select></Field>
           <Field label={`Allocation (${form.allocationPercent}%)`}><Input type="range" min={0} max={100} value={form.allocationPercent} onChange={(e) => setForm({ ...form, allocationPercent: e.target.value })} /></Field>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <Field label="Start"><Input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} /></Field>
-            <Field label="End"><Input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} /></Field>
+            <Field label="Start" required><Input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} /></Field>
+            <Field label="End" required><Input type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} /></Field>
           </div>
         </>}
       </Dialog>

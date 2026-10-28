@@ -6,11 +6,13 @@ import { Card, CardContent, Button, Input, Select, Field, Skeleton } from '../co
 import { Dialog, Table } from '../components/ui/Dialog.jsx';
 import { PageHeader } from '../components/Layout.jsx';
 import { PaymentStatusPill, money, fmtDate, isPaymentOverdue, effectivePaymentStatus } from '../components/pills.jsx';
+import { useSubmitGuard } from '../lib/useSubmitGuard.js';
 
 const FILTERS = ['All', 'Pending', 'Invoiced', 'Partial', 'Paid', 'Overdue'];
 const iconBtnStyle = { display: 'inline-flex', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--muted-foreground)', padding: 4, borderRadius: 6 };
 
 export function Payments() {
+  const [busy, guard] = useSubmitGuard(); // blocks double-submit on save
   const { data, loading, create, update, remove } = useData();
   const { canWrite } = useAuth();
   const canEdit = canWrite('ProjectPayment');
@@ -65,7 +67,7 @@ export function Payments() {
     setOpen(false);
   }
   function del(row) {
-    if (window.confirm('Delete this payment?')) remove('ProjectPayment', row._spId);
+    remove('ProjectPayment', row._spId);
   }
 
   return (
@@ -103,7 +105,7 @@ export function Payments() {
       </Card>
 
       <Dialog open={open} onClose={() => setOpen(false)} title={form?._spId ? 'Edit payment' : 'Add payment'}
-        footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save}>{form?._spId ? 'Save' : 'Add'}</Button></>}>
+        footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={guard(save)} disabled={busy}>{busy ? 'Saving…' : form?._spId ? 'Save' : 'Add'}</Button></>}>
         {form && <>
           <Field label="Project">
             <Select value={form.projectId} onChange={(e) => setForm({ ...form, projectId: e.target.value })}>

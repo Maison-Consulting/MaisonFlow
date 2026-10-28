@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Search } from 'lucide-react';
 import { useData } from '../context/DataContext.jsx';
@@ -20,6 +20,11 @@ export function Projects() {
   const [form, setForm] = useState(EMPTY);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
+  // Blocks a second Create while the first is still saving (a double click
+  // would otherwise create two projects). The ref catches clicks that land
+  // before React re-renders the disabled button.
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
 
   const filtered = data.Project.filter((p) => {
     const q = query.trim().toLowerCase();
@@ -28,11 +33,21 @@ export function Projects() {
   });
 
   async function save() {
+    if (savingRef.current) return;
     if (!form.managerId) { setError('Project owner is required.'); return; }
     setError('');
-    const saved = await create('Project', { ...form, budget: Number(form.budget) || 0 });
-    setOpen(false);
-    if (saved?.projectId) navigate(`/projects/${saved.projectId}`);
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const saved = await create('Project', { ...form, budget: Number(form.budget) || 0 });
+      setOpen(false);
+      if (saved?.projectId) navigate(`/projects/${saved.projectId}`);
+    } catch {
+      // create() already showed the error toast; keep the form open to retry.
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   }
 
   return (
@@ -86,7 +101,7 @@ export function Projects() {
       )}
 
       <Dialog open={open} onClose={() => setOpen(false)} title="New project"
-        footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={save}>Create</Button></>}>
+        footer={<><Button variant="outline" onClick={() => setOpen(false)} disabled={saving}>Cancel</Button><Button onClick={save} disabled={saving}>{saving ? 'Creating…' : 'Create'}</Button></>}>
         {error && (
           <div style={{ marginBottom: '0.85rem', padding: '0.6rem 0.8rem', borderRadius: 'var(--radius)', background: 'oklch(0.60 0.22 25 / 0.1)', border: '1px solid var(--destructive)', color: 'var(--foreground)', fontSize: '0.82rem' }}>
             {error}
